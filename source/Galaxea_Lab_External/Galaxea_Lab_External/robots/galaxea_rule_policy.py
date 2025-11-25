@@ -817,7 +817,7 @@ class GalaxeaRulePolicy:
             # action = None
             # joint_ids = None
 
-            action = torch.cat([self.initial_pos_left, self.initial_pos_right], dim=0)
+            action = torch.cat([self.initial_pos_left, self.initial_pos_right], dim=0).unsqueeze(0)
             joint_ids = self.left_arm_entity_cfg.joint_ids + self.right_arm_entity_cfg.joint_ids
 
 
@@ -875,7 +875,7 @@ class GalaxeaRulePolicy:
 
         # Reset left arm
         if self.count >= self.count_step_5[0] and self.count < self.count_step_5[-1]:
-            action = self.initial_pos_left
+            action = self.initial_pos_left.unsqueeze(0)
             joint_ids = self.left_arm_entity_cfg.joint_ids
 
         # Pick up the 3rd gear
@@ -918,7 +918,7 @@ class GalaxeaRulePolicy:
 
         # Reset right arm
         if self.count >= self.count_step_10[0] and self.count < self.count_step_10[-1]:
-            action = self.initial_pos_right
+            action = self.initial_pos_right.unsqueeze(0)
             joint_ids = self.right_arm_entity_cfg.joint_ids
 
         # Pick up the ring gear
@@ -979,7 +979,7 @@ class GalaxeaRulePolicy:
                 # print(f'Reset action: {reset_action}')
                 # print(f'reset_joint_ids: {reset_joint_ids}')
 
-                action = torch.cat([pick_action, reset_action], dim=1)
+                action = torch.cat([pick_action, reset_action], dim=1).unsqueeze(0)
                 joint_ids = pick_joint_ids + reset_joint_ids
 
                 # print(f'Action: {action}')

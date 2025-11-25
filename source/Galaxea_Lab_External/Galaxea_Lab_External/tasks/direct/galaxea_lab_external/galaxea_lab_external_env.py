@@ -25,6 +25,7 @@ from pxr import Usd, Sdf, UsdPhysics, UsdGeom
 from isaaclab.sim.spawners.materials import physics_materials, physics_materials_cfg
 from isaaclab.sim.spawners.materials import spawn_rigid_body_material
 from isaaclab.managers import SceneEntityCfg
+import isaaclab.envs.mdp as mdp
 
 import isaacsim.core.utils.torch as torch_utils
 
@@ -88,6 +89,9 @@ class GalaxeaLabExternalEnv(DirectRLEnv):
 
         self.rule_policy = GalaxeaRulePolicy(sim_utils.SimulationContext.instance(), self.scene, self.obj_dict)
         self.initial_root_state = None
+
+        self.env_step_action = None
+        self.env_step_joint_ids = None
 
         self.act = dict()
         self.obs = dict()
@@ -180,27 +184,19 @@ class GalaxeaLabExternalEnv(DirectRLEnv):
     def _pre_physics_step(self, actions: torch.Tensor) -> None:
         # self.actions = actions.clone()
         # print(f"_pre_physics_step actions: {self.actions}")
-        current_pos = self.robot.data.joint_pos
 
-        self._left_arm_action = current_pos[:, self._left_arm_joint_idx]
-        self._right_arm_action = current_pos[:, self._right_arm_joint_idx]
-        self._left_gripper_action = current_pos[:, self._left_gripper_dof_idx[0]]
-        self._right_gripper_action = current_pos[:, self._right_gripper_dof_idx[0]]
+        pass
 
     def _apply_action(self) -> None:
         # print(f"Time: {self.rule_policy.count * self.sim.get_physics_dt()}, Apply action")
-        action, joint_ids = self.rule_policy.get_action()
+        current_time_s = mdp.observations.current_time_s(self)
+        print(f"Apply action: {current_time_s.item()} seconds")
+        # action, joint_ids = self.rule_policy.get_action()
+        action = self.env_step_action
+        joint_ids = self.env_step_joint_ids
+        # print(f"action: {action.item()}")
 
         if joint_ids is not None:
-            if joint_ids == self._left_arm_joint_idx:
-                self._left_arm_action = action
-            elif joint_ids == self._right_arm_joint_idx:
-                self._right_arm_action = action
-            elif joint_ids == self._left_gripper_dof_idx:
-                self._left_gripper_action = action[0]
-            elif joint_ids == self._right_gripper_dof_idx:
-                self._right_gripper_action = action[0]
-
             self.robot.set_joint_position_target(action, joint_ids=joint_ids)
 
         self.rule_policy.count += 1
@@ -220,12 +216,10 @@ class GalaxeaLabExternalEnv(DirectRLEnv):
             cam.update(dt=sim_dt)
 
 
-        self.act = dict(left_arm_action=self._left_arm_action, right_arm_action=self._right_arm_action,
-            left_gripper_action=self._left_gripper_action, right_gripper_action=self._right_gripper_action)
-
-
     def _get_observations(self) -> dict:
-        print(f"Time: {self.rule_policy.count * self.sim.get_physics_dt()}, Get observations")
+        # print(f"Time: {self.rule_policy.count * self.sim.get_physics_dt()}, Get observations")
+        current_time_s = mdp.observations.current_time_s(self)
+        print(f"Get observations: {current_time_s.item()} seconds")
         data_type = "rgb"
         # self.head_camera._update_outdated_buffers()
         # self.left_hand_camera._update_outdated_buffers()
@@ -619,10 +613,47 @@ class GalaxeaLabExternalEnv(DirectRLEnv):
 
 
     def step(self, actions):
-        obs, reward, terminated, truncated, info = super().step(actions)
+        # print(f"RL step: {self.rule_policy.count * self.sim.get_physics_dt()} seconds")
+        current_time_s = mdp.observations.current_time_s(self)
+        print(f"RL step: {current_time_s.item()} seconds")
+
+        current_pos = self.robot.data.joint_pos
+
+        self._left_arm_action = current_pos[:, self._left_arm_joint_idx]
+        self._right_arm_action = current_pos[:, self._right_arm_joint_idx]
+        self._left_gripper_action = current_pos[:, self._left_gripper_dof_idx[0]]
+        self._right_gripper_action = current_pos[:, self._right_gripper_dof_idx[0]]
+
+        self.env_step_action, self.env_step_joint_ids = self.rule_policy.get_action()
+        # print(f"env_step_action: {self.env_step_action}")
+        # print(f"env_step_joint_ids: {self.env_step_joint_ids}")
+        
+        if self.env_step_joint_ids == self._left_arm_joint_idx:
+            self._left_arm_action = self.env_step_action.clone()
+        elif self.env_step_joint_ids == self._right_arm_joint_idx:
+            self._right_arm_action = self.env_step_action.clone()
+        elif self.env_step_joint_ids == self._left_arm_joint_idx + self._right_arm_joint_idx:
+            self._left_arm_action = self.env_step_action.clone()[:, :6]
+            self._right_arm_action = self.env_step_action.clone()[:, 6:12]
+        elif self.env_step_joint_ids == self._left_gripper_dof_idx:
+            self._left_gripper_action = self.env_step_action[0].clone()
+        elif self.env_step_joint_ids == self._right_gripper_dof_idx:
+            self._right_gripper_action = self.env_step_action[0].clone()
+        self.act = dict(left_arm_action=self._left_arm_action, right_arm_action=self._right_arm_action,
+            left_gripper_action=self._left_gripper_action, right_gripper_action=self._right_gripper_action)
+
+
+        # print(f"left_arm_action: {self.act['left_arm_action']}")
+        # print(f"right_arm_action: {self.act['right_arm_action']}")
+        # print(f"left_gripper_action: {self.act['left_gripper_action']}")
+        # print(f"right_gripper_action: {self.act['right_gripper_action']}")
+
+        # print(f"act: {self.act}")
 
         if self.cfg.record_data and (self.rule_policy.count % self.cfg.record_freq == 0):
             self._record_data()
+
+        obs, reward, terminated, truncated, info = super().step(actions)
 
         return obs, reward, terminated, truncated, info
 
@@ -631,6 +662,7 @@ class GalaxeaLabExternalEnv(DirectRLEnv):
         """
         At sampling rate : self.cfg.record_freq
         observations
+        - time (1,) 'float32'
         - observations
             - head_rgb     (240, 320, 3) 'uint8'
             - left_hand_rgb     (240, 320, 3) 'uint8'
@@ -660,7 +692,7 @@ class GalaxeaLabExternalEnv(DirectRLEnv):
         #     if isinstance(value, np.ndarray):
         #         print(f"Shape: {value.shape}")
         #         print(f"Type: {value.dtype}")
-        print("Begin to record data")
+        # print("Begin to record data")
 
         self.data_dict['/observations/head_rgb'].append(self.obs['head_rgb'].cpu().numpy().squeeze(0))
         self.data_dict['/observations/left_hand_rgb'].append(self.obs['left_hand_rgb'].cpu().numpy().squeeze(0))
@@ -722,7 +754,9 @@ class GalaxeaLabExternalEnv(DirectRLEnv):
                 # print(f"Writing {name} to hdf5 file")
                 f[name][...] = value
 
-        print(f"Saved data at {self.rule_policy.count * self.cfg.record_freq} steps")
+        # print(f"Saved data at {self.rule_policy.count * self.sim.get_physics_dt()} seconds")
+        current_time_s = mdp.observations.current_time_s(self)
+        print(f"Saved data at {current_time_s.item()} seconds")
             
             
             

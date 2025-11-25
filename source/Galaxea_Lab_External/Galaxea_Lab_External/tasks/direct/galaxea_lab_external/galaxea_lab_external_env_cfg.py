@@ -43,6 +43,7 @@ class GalaxeaLabExternalEnvCfg(DirectRLEnvCfg):
     record_freq = 5
 
     # env
+    sim_dt = 0.01
     decimation = 5
     episode_length_s = 60.0
     # - spaces definition
@@ -51,7 +52,7 @@ class GalaxeaLabExternalEnvCfg(DirectRLEnvCfg):
     state_space = 0
 
     # simulation
-    sim: SimulationCfg = SimulationCfg(dt=1 / 100, render_interval=decimation)
+    sim: SimulationCfg = SimulationCfg(dt=sim_dt, render_interval=decimation)
 
     # robot(s)
     robot_cfg: ArticulationCfg = GALAXEA_R1_CHALLENGE_CFG.replace(prim_path="/World/envs/env_.*/Robot")
