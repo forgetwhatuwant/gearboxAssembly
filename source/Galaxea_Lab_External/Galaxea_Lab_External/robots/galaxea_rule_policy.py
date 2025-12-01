@@ -786,6 +786,9 @@ class GalaxeaRulePolicy:
         return action, joint_ids
 
     def get_action(self):
+        action = None
+        joint_ids = None
+
         if self.count < self.count_step_0:
             # left arm
             # left_action, left_arm_joint_ids = self.move_robot_to_position(self.left_arm_entity_cfg, 
@@ -976,14 +979,16 @@ class GalaxeaRulePolicy:
                     reset_action = self.initial_pos_left.unsqueeze(0)
                     reset_joint_ids = self.left_arm_entity_cfg.joint_ids
 
-                # print(f'Reset action: {reset_action}')
-                # print(f'reset_joint_ids: {reset_joint_ids}')
+                print(f'Pick action: {pick_action}')
+                print(f'pick_joint_ids: {pick_joint_ids}')
+                print(f'Reset action: {reset_action}')
+                print(f'reset_joint_ids: {reset_joint_ids}')
 
                 action = torch.cat([pick_action, reset_action], dim=1).unsqueeze(0)
                 joint_ids = pick_joint_ids + reset_joint_ids
 
-                # print(f'Action: {action}')
-                # print(f'joint_ids: {joint_ids}')
+                print(f'Action: {action}')
+                print(f'joint_ids: {joint_ids}')
 
 
         # Mount the reducer to the gear

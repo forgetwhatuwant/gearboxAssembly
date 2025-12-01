@@ -8,6 +8,7 @@ from __future__ import annotations
 import math
 import torch
 import numpy as np
+import time
 from datetime import datetime
 # from torchvision.utils import save_image
 from PIL import Image
@@ -88,42 +89,6 @@ class GalaxeaLabExternalEnv(DirectRLEnv):
 
         self.joint_pos = self.robot.data.joint_pos[:, self._joint_idx]
 
-        self.rule_policy = GalaxeaRulePolicy(sim_utils.SimulationContext.instance(), self.scene, self.obj_dict)
-        self.initial_root_state = None
-
-        self.env_step_action = None
-        self.env_step_joint_ids = None
-
-        self.act = dict()
-        self.obs = dict()
-
-        self.score = 0
-
-        self.data_dict = {
-            '/observations/head_rgb': [],
-            '/observations/left_hand_rgb': [],
-            '/observations/right_hand_rgb': [],
-            '/observations/head_depth': [],
-            '/observations/left_hand_depth': [],
-            '/observations/right_hand_depth': [],
-            '/observations/left_arm_joint_pos': [],
-            '/observations/right_arm_joint_pos': [],
-            '/observations/left_gripper_joint_pos': [],
-            '/observations/right_gripper_joint_pos': [],
-            '/observations/left_arm_joint_vel': [],
-            '/observations/right_arm_joint_vel': [],
-            '/observations/left_gripper_joint_vel': [],
-            '/observations/right_gripper_joint_vel': [],
-            '/actions/left_arm_action': [],
-            '/actions/right_arm_action': [],
-            '/actions/left_gripper_action': [],
-            '/actions/right_gripper_action': [],
-            '/score': [],
-            '/current_time': [],
-        }
-
-        self.save_hdf5_file_name = './data/data_' + datetime.now().strftime("%Y%m%d_%H%M%S") + '.hdf5'
-
     def _setup_scene(self):
         self.robot = Articulation(self.cfg.robot_cfg)
         
@@ -191,6 +156,7 @@ class GalaxeaLabExternalEnv(DirectRLEnv):
         pass
 
     def _apply_action(self) -> None:
+        start_time = time.time()
         # print(f"Time: {self.rule_policy.count * self.sim.get_physics_dt()}, Apply action")
         current_time_s = mdp.observations.current_time_s(self)
         print(f"Apply action: {current_time_s.item()} seconds")
@@ -218,6 +184,8 @@ class GalaxeaLabExternalEnv(DirectRLEnv):
         for cam in [self.head_camera, self.left_hand_camera, self.right_hand_camera]:
             cam.update(dt=sim_dt)
 
+        end_time = time.time()
+        # print(f"Apply action time cost: {end_time - start_time} seconds")
 
     def _get_observations(self) -> dict:
         # print(f"Time: {self.rule_policy.count * self.sim.get_physics_dt()}, Get observations")
@@ -385,14 +353,53 @@ class GalaxeaLabExternalEnv(DirectRLEnv):
         return score, time_cost
 
     def _get_rewards(self) -> torch.Tensor:
+        print(f"Get rewards at {self.rule_policy.count * self.sim.get_physics_dt()} seconds")
         self.score, time_cost = self.evaluate_score()
         print(f"score: {self.score}")
 
         return self.score
 
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
+        print(f"Get dones at {self.rule_policy.count * self.sim.get_physics_dt()} seconds")
         finish_task = torch.tensor(self.evaluate_score() == 6, device=self.device) or self.rule_policy.count >= self.rule_policy.total_time_steps
         time_out = self.episode_length_buf >= self.max_episode_length - 1
+
+        if finish_task or time_out:
+            # Write data to hdf5 file
+            # Output file format: data+date+time.hdf5
+            print(f"Writing data to hdf5 file")
+            with h5py.File(self.save_hdf5_file_name, 'w') as f:
+                f.attrs['sim'] = True
+                obs = f.create_group('observations')
+                act = f.create_group('actions')
+                num_items = len(self.data_dict['/observations/head_rgb'])
+                obs.create_dataset('head_rgb', shape=(num_items, 240, 320, 3), dtype='uint8')
+                obs.create_dataset('left_hand_rgb', shape=(num_items, 240, 320, 3), dtype='uint8')
+                obs.create_dataset('right_hand_rgb', shape=(num_items, 240, 320, 3), dtype='uint8')
+                obs.create_dataset('head_depth', shape=(num_items, 240, 320), dtype='float32')
+                obs.create_dataset('left_hand_depth', shape=(num_items, 240, 320), dtype='float32')
+                obs.create_dataset('right_hand_depth', shape=(num_items, 240, 320), dtype='float32')
+                obs.create_dataset('left_arm_joint_pos', shape=(num_items, 6), dtype='float32')
+                obs.create_dataset('right_arm_joint_pos', shape=(num_items, 6), dtype='float32')
+                obs.create_dataset('left_gripper_joint_pos', shape=(num_items, ), dtype='float32')
+                obs.create_dataset('right_gripper_joint_pos', shape=(num_items, ), dtype='float32')
+                obs.create_dataset('left_arm_joint_vel', shape=(num_items, 6), dtype='float32')
+                obs.create_dataset('right_arm_joint_vel', shape=(num_items, 6), dtype='float32')
+                obs.create_dataset('left_gripper_joint_vel', shape=(num_items, ), dtype='float32')
+                obs.create_dataset('right_gripper_joint_vel', shape=(num_items, ), dtype='float32')
+                act.create_dataset('left_arm_action', shape=(num_items, 6), dtype='float32')
+                act.create_dataset('right_arm_action', shape=(num_items, 6), dtype='float32')
+                act.create_dataset('left_gripper_action', shape=(num_items, ), dtype='float32')
+                act.create_dataset('right_gripper_action', shape=(num_items, ), dtype='float32')
+                
+                f.create_dataset('score', shape=(num_items,), dtype='int32')
+                f.create_dataset('current_time', shape=(num_items,), dtype='float32')
+                # f.create_dataset('time_cost', data=self.time_cost)
+
+                for name, value in self.data_dict.items():
+                    # print(f"Writing {name} to hdf5 file")
+                    f[name][...] = value
+
         return finish_task, time_out
 
     def _initialize_scene(self):
@@ -564,6 +571,43 @@ class GalaxeaLabExternalEnv(DirectRLEnv):
 
 
     def _reset_idx(self, env_ids: Sequence[int] | None):
+        
+        self.rule_policy = GalaxeaRulePolicy(sim_utils.SimulationContext.instance(), self.scene, self.obj_dict)
+        self.initial_root_state = None
+
+        self.env_step_action = None
+        self.env_step_joint_ids = None
+
+        self.act = dict()
+        self.obs = dict()
+
+        self.score = 0
+
+        self.data_dict = {
+            '/observations/head_rgb': [],
+            '/observations/left_hand_rgb': [],
+            '/observations/right_hand_rgb': [],
+            '/observations/head_depth': [],
+            '/observations/left_hand_depth': [],
+            '/observations/right_hand_depth': [],
+            '/observations/left_arm_joint_pos': [],
+            '/observations/right_arm_joint_pos': [],
+            '/observations/left_gripper_joint_pos': [],
+            '/observations/right_gripper_joint_pos': [],
+            '/observations/left_arm_joint_vel': [],
+            '/observations/right_arm_joint_vel': [],
+            '/observations/left_gripper_joint_vel': [],
+            '/observations/right_gripper_joint_vel': [],
+            '/actions/left_arm_action': [],
+            '/actions/right_arm_action': [],
+            '/actions/left_gripper_action': [],
+            '/actions/right_gripper_action': [],
+            '/score': [],
+            '/current_time': [],
+        }
+
+        self.save_hdf5_file_name = './data/data_' + datetime.now().strftime("%Y%m%d_%H%M%S") + '.hdf5'
+
         if env_ids is None:
             env_ids = self.robot._ALL_INDICES
         super()._reset_idx(env_ids)
@@ -697,6 +741,8 @@ class GalaxeaLabExternalEnv(DirectRLEnv):
         #         print(f"Type: {value.dtype}")
         # print("Begin to record data")
 
+        start_time = time.time()
+
         self.data_dict['/observations/head_rgb'].append(self.obs['head_rgb'].cpu().numpy().squeeze(0))
         self.data_dict['/observations/left_hand_rgb'].append(self.obs['left_hand_rgb'].cpu().numpy().squeeze(0))
         self.data_dict['/observations/right_hand_rgb'].append(self.obs['right_hand_rgb'].cpu().numpy().squeeze(0))
@@ -721,48 +767,14 @@ class GalaxeaLabExternalEnv(DirectRLEnv):
 
         self.data_dict['/score'].append(self.score)
         self.data_dict['/current_time'].append(self.rule_policy.count * self.sim.get_physics_dt())
-       
         
 
-        # Write data to hdf5 file
-        # Output file format: data+date+time.hdf5
-        with h5py.File(self.save_hdf5_file_name, 'w') as f:
-            f.attrs['sim'] = True
-            obs = f.create_group('observations')
-            act = f.create_group('actions')
-            num_items = len(self.data_dict['/observations/head_rgb'])
-            obs.create_dataset('head_rgb', shape=(num_items, 240, 320, 3), dtype='uint8')
-            obs.create_dataset('left_hand_rgb', shape=(num_items, 240, 320, 3), dtype='uint8')
-            obs.create_dataset('right_hand_rgb', shape=(num_items, 240, 320, 3), dtype='uint8')
-            obs.create_dataset('head_depth', shape=(num_items, 240, 320), dtype='float32')
-            obs.create_dataset('left_hand_depth', shape=(num_items, 240, 320), dtype='float32')
-            obs.create_dataset('right_hand_depth', shape=(num_items, 240, 320), dtype='float32')
-            obs.create_dataset('left_arm_joint_pos', shape=(num_items, 6), dtype='float32')
-            obs.create_dataset('right_arm_joint_pos', shape=(num_items, 6), dtype='float32')
-            obs.create_dataset('left_gripper_joint_pos', shape=(num_items, ), dtype='float32')
-            obs.create_dataset('right_gripper_joint_pos', shape=(num_items, ), dtype='float32')
-            obs.create_dataset('left_arm_joint_vel', shape=(num_items, 6), dtype='float32')
-            obs.create_dataset('right_arm_joint_vel', shape=(num_items, 6), dtype='float32')
-            obs.create_dataset('left_gripper_joint_vel', shape=(num_items, ), dtype='float32')
-            obs.create_dataset('right_gripper_joint_vel', shape=(num_items, ), dtype='float32')
-            act.create_dataset('left_arm_action', shape=(num_items, 6), dtype='float32')
-            act.create_dataset('right_arm_action', shape=(num_items, 6), dtype='float32')
-            act.create_dataset('left_gripper_action', shape=(num_items, ), dtype='float32')
-            act.create_dataset('right_gripper_action', shape=(num_items, ), dtype='float32')
-            
-            f.create_dataset('score', shape=(num_items,), dtype='int32')
-            f.create_dataset('current_time', shape=(num_items,), dtype='float32')
-            # f.create_dataset('time_cost', data=self.time_cost)
-
-            for name, value in self.data_dict.items():
-                # print(f"Writing {name} to hdf5 file")
-                f[name][...] = value
-
         # print(f"Saved data at {self.rule_policy.count * self.sim.get_physics_dt()} seconds")
-        current_time_s = mdp.observations.current_time_s(self)
-        print(f"Saved data at {current_time_s.item()} seconds")
+        # current_time_s = mdp.observations.current_time_s(self)
+        # print(f"Saved data at {current_time_s.item()} seconds")
             
-            
+        end_time = time.time()
+        # print(f"Record data time cost: {end_time - start_time} seconds")
             
 
        

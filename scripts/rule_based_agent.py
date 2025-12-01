@@ -62,8 +62,13 @@ def main():
             # sample actions from -1 to 1
             actions = 2 * torch.rand(env.action_space.shape, device=env.unwrapped.device) - 1
             # apply actions
-            # obs, reward, terminated, truncated, info = env.step(actions)
-            env.step(actions)
+            obs, reward, terminated, truncated, info = env.step(actions)
+
+            print(f"Terminated: {terminated}")
+            print(f"Truncated: {truncated}")
+            # env.step(actions)
+            if terminated or truncated:
+                env.reset()
 
     # close the simulator
     env.close()
