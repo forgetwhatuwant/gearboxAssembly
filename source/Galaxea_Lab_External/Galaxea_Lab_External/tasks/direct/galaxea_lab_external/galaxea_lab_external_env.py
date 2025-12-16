@@ -522,6 +522,8 @@ class GalaxeaLabExternalEnv(DirectRLEnv):
                         y = -torch.rand(1, device=self.device).item() * 0.4
                     elif obj_name == "sun_planetary_gear_4":
                         y = -torch.rand(1, device=self.device).item() * 0.4
+                    # elif obj_name == "planetary_reducer":
+                    #     y = -torch.rand(1, device=self.device).item() * 0.4
 
                     pos = torch.tensor([x, y, z], device=self.device)
 
@@ -601,7 +603,9 @@ class GalaxeaLabExternalEnv(DirectRLEnv):
         # root_state = torch.zeros((self.scene.num_envs, 7), device=self.device)
         # root_state[:, :3] = table_translate
         # root_state[:, 3:7] = table_rotate
-        # self.table.write_root_state_to_sim(root_state)
+
+        root_state = self.table.data.default_root_state.clone()
+        self.table.write_root_state_to_sim(root_state)
 
        
         self.save_hdf5_file_name = './data/data_' + datetime.now().strftime("%Y%m%d_%H%M%S") + '.hdf5'
