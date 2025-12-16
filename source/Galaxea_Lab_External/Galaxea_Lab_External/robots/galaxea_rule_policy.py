@@ -63,6 +63,7 @@ class GalaxeaRulePolicy:
         self.TCP_offset_x = 0.3864 - 0.3785
         self.table_height = 0.9
         self.grasping_height = -0.003
+        self.lifting_height = 0.2
 
         self.diff_ik_controller, self.left_arm_entity_cfg, self.left_gripper_entity_cfg = self.get_config("left")
         self.diff_ik_controller, self.right_arm_entity_cfg, self.right_gripper_entity_cfg = self.get_config("right")
@@ -485,7 +486,7 @@ class GalaxeaRulePolicy:
                 torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=self.sim.device), local_pos
             )
             root_state = torch.cat([target_position, target_orientation], dim=-1)
-            obj_height_offset = 0.028
+            obj_height_offset = 0.030
 
         elif gear_id == 6: # Reducer
             root_state = self.initial_root_state["planetary_reducer"]
@@ -503,7 +504,7 @@ class GalaxeaRulePolicy:
         # target_orientation = obj.data.default_root_state[:, 3:7].clone()
         # print(f"target_position: {target_position}, target_orientation: {target_orientation}")
         # Step 1.1: Move the arm to the target position above the gear and keep the orientation
-        target_position_h = target_position + torch.tensor([0.0, 0.0, 0.15], device=self.sim.device)
+        target_position_h = target_position + torch.tensor([0.0, 0.0, self.lifting_height], device=self.sim.device)
         
         # target_orientation = torch.tensor([[0.0, -1.0, 0.0, 0.0]], device=sim.device)
         target_orientation = root_state[:, 3:7].clone()
@@ -598,6 +599,7 @@ class GalaxeaRulePolicy:
                 self.current_target_position = root_state[:, :3].clone()
                 self.current_target_orientation = root_state[:, 3:7].clone()
             obj_height_offset = 0.023 + 0.02
+            mount_height_offset = 0.025
 
 
         else: # Mount the gear on the planetary carrier
@@ -636,7 +638,7 @@ class GalaxeaRulePolicy:
 
         target_position += torch.tensor([self.TCP_offset_x, 0.0, self.TCP_offset_z], device=self.sim.device)
         
-        target_position_h = target_position + torch.tensor([0.0, 0.0, 0.1], device=self.sim.device)
+        target_position_h = target_position + torch.tensor([0.0, 0.0, self.lifting_height], device=self.sim.device)
 
         target_orientation = torch.tensor([[0.0, -1.0, 0.0, 0.0]], device=self.sim.device)
 
@@ -730,7 +732,7 @@ class GalaxeaRulePolicy:
 
         target_position += torch.tensor([self.TCP_offset_x, 0.0, self.TCP_offset_z], device=self.sim.device)
         
-        target_position_h = target_position + torch.tensor([0.0, 0.0, 0.1], device=self.sim.device)
+        target_position_h = target_position + torch.tensor([0.0, 0.0, self.lifting_height], device=self.sim.device)
         target_orientation = torch.tensor([[0.0, -1.0, 0.0, 0.0]], device=self.sim.device)
 
         target_position_h_down = target_position + torch.tensor([0.0, 0.0, mount_height_offset], device=self.sim.device)
@@ -828,6 +830,39 @@ class GalaxeaRulePolicy:
 
             action = torch.cat([self.initial_pos_left, self.initial_pos_right], dim=0).unsqueeze(0)
             joint_ids = self.left_arm_entity_cfg.joint_ids + self.right_arm_entity_cfg.joint_ids
+
+        # Test
+        # Mount the reducer to the gear
+            # Pick up the reducer
+        # if self.count >= self.count_step_1[0] and self.count < self.count_step_1[-1]:
+        #     gear_id = 6
+
+        #     arm = self.gear_to_pin_map['planetary_reducer']['arm']
+        #     if arm == 'right':
+        #         current_arm = self.right_arm_entity_cfg
+        #         current_gripper = self.right_gripper_entity_cfg
+        #     else:
+        #         current_arm = self.left_arm_entity_cfg
+        #         current_gripper = self.left_gripper_entity_cfg
+
+        #     pick_action, pick_joint_ids = self.pick_up_target_gear(gear_id, self.count_step_1, current_arm, current_gripper, self.diff_ik_controller)
+        #     # print(f'Pick action: {pick_action}')
+        #     # print(f'pick_joint_ids: {pick_joint_ids}')
+        #     action = pick_action
+        #     joint_ids = pick_joint_ids
+
+        # if self.count >= self.count_step_2[0] and self.count < self.count_step_2[-1]:
+        #     gear_id = 6
+        #     # Reducer location
+        #     # pos = self.initial_root_state["planetary_reducer"][:, :3].clone()
+        #     arm = self.gear_to_pin_map['planetary_reducer']['arm']
+        #     if arm == 'right':
+        #         current_arm = self.right_arm_entity_cfg
+        #         current_gripper = self.right_gripper_entity_cfg
+        #     else:
+        #         current_arm = self.left_arm_entity_cfg
+        #         current_gripper = self.left_gripper_entity_cfg
+        #     action, joint_ids = self.mount_gear_to_target(gear_id, self.count_step_2, current_arm, current_gripper)
 
 
         # Pick up the 1st gear
