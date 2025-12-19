@@ -18,8 +18,8 @@ from visualize_episodes import save_videos
 
 from sim_env import BOX_POSE
 
-import IPython
-e = IPython.embed
+# import IPython
+# e = IPython.embed
 
 def main(args):
     set_seed(1)

@@ -475,3 +475,172 @@ class DataReplayPolicyWrapper(PolicyWrapper):
         """Reset replay to beginning of trajectory."""
         print(f"\n[Data Replay] Resetting to step 0")
         self.step_idx = 0
+
+
+class LeRobotPolicyWrapper(PolicyWrapper):
+    """
+    Wrapper for LeRobot policies (ACT, Diffusion, etc.) trained via LeRobot.
+    """
+    
+    def __init__(self, checkpoint_path: str, policy_type: str = None):
+        """
+        Initialize LeRobot policy wrapper.
+        
+        Args:
+            checkpoint_path: Path to local checkpoint folder or HF Hub ID
+            policy_type: Optional policy type override (if not provided, read from config)
+        """
+        self.checkpoint_path = checkpoint_path
+        self._device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        
+        # Add LeRobot to path if needed (assuming standard location)
+        # Using absolute path based on workspace structure
+        # /home/hls/codes/gearboxAssembly/lerobot/src
+        lerobot_path = "/home/hls/codes/gearboxAssembly/lerobot/src"
+        if os.path.exists(lerobot_path) and lerobot_path not in sys.path:
+            sys.path.append(lerobot_path)
+            
+        try:
+            from lerobot.policies.factory import make_policy, make_pre_post_processors, get_policy_class
+            from lerobot.policies.pretrained import PreTrainedPolicy
+            from lerobot.processor import PolicyAction
+        except ImportError:
+            print(f"⚠ Could not import LeRobot from {lerobot_path}. Trying relative path...")
+            # Try relative path backup
+            lerobot_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../../../../lerobot/src'))
+            if os.path.exists(lerobot_path) and lerobot_path not in sys.path:
+                sys.path.append(lerobot_path)
+                from lerobot.policies.factory import make_policy, make_pre_post_processors, get_policy_class
+                from lerobot.policies.pretrained import PreTrainedPolicy
+                from lerobot.processor import PolicyAction
+            else:
+                raise ImportError("Could not find or import LeRobot library.")
+
+        print(f"\nLoading LeRobot policy from: {checkpoint_path}")
+        
+        # Load policy
+        # 1. Infer type from config.json if not provided
+        if not policy_type:
+            config_path = os.path.join(checkpoint_path, "config.json")
+            if os.path.exists(config_path):
+                import json
+                with open(config_path, 'r') as f:
+                    config_dict = json.load(f)
+                policy_type = config_dict.get('type')
+        
+        if not policy_type:
+            raise ValueError("Could not infer policy type from config.json and none provided.")
+
+        # 2. Get policy class and load
+        try:
+            policy_cls = get_policy_class(policy_type)
+        except ValueError:
+             raise ValueError(f"Unsupported LeRobot policy type: {policy_type}")
+
+        self.policy = policy_cls.from_pretrained(checkpoint_path)
+        self.policy.to(self._device)
+        self.policy.eval()
+        
+        # 3. Create processors (normalization, etc.)
+        self.preprocessor, self.postprocessor = make_pre_post_processors(
+            policy_cfg=self.policy.config,
+            pretrained_path=checkpoint_path
+        )
+        
+        # Move processors to device if possible
+        if hasattr(self.preprocessor, "to"):
+            self.preprocessor.to(self._device)
+        
+        # 4. Determine camera names/mapping
+        self._camera_names = []
+        self._camera_key_mapping = {}  # Map env_name -> policy_key
+        
+        # Mappings from LeRobot keys to standard Environment keys
+        # Env keys: 'head_rgb', 'left_hand_rgb', 'right_hand_rgb'
+        key_mapping_heuristics = {
+            "head": "head_rgb",
+            "top": "head_rgb",
+            "phone": "head_rgb",
+            "left_hand": "left_hand_rgb",
+            "left_wrist": "left_hand_rgb",
+            "right_hand": "right_hand_rgb",
+            "right_wrist": "right_hand_rgb"
+        }
+        
+        if self.policy.config.image_features:
+            for key in self.policy.config.image_features:
+                # key e.g. "observation.images.head_camera"
+                parts = key.split('.')
+                cam_name = parts[-1]  # "head_camera"
+                
+                # Find matching standard name
+                found_match = False
+                for h_key, standard_name in key_mapping_heuristics.items():
+                    if h_key in cam_name:
+                        self._camera_names.append(standard_name)
+                        self._camera_key_mapping[standard_name] = key
+                        found_match = True
+                        break
+                
+                if not found_match:
+                    print(f"⚠ Warning: Could not automatically map policy camera feature '{key}' to standard env cameras.")
+                    print(f"  Available standard env cameras: {list(set(key_mapping_heuristics.values()))}")
+        
+        # Sort for consistency
+        self._camera_names.sort()
+        
+        print("\n✓ LeRobot policy loaded successfully")
+        print(f"  - Type: {policy_type}")
+        print(f"  - Input Keys: {list(self.policy.config.input_features.keys())}")
+        print(f"  - Mapped Cameras: {self._camera_names}")
+        print(f"  - FPS: {self.required_control_frequency}")
+
+    @property
+    def required_control_frequency(self) -> Optional[float]:
+        """Get required control frequency from config if available."""
+        if hasattr(self.policy.config, "fps") and self.policy.config.fps:
+            return float(self.policy.config.fps)
+        return 50.0  # Default to 50Hz for ACT/Diffusion if unknown
+
+    @property
+    def camera_names(self) -> list:
+        return self._camera_names
+
+    @property
+    def device(self) -> torch.device:
+        return self._device
+
+    def predict(self, qpos: torch.Tensor, images: torch.Tensor) -> torch.Tensor:
+        """
+        Predict action using LeRobot policy.
+        
+        Args:
+            qpos: (B, 14)
+            images: (B, N, 3, H, W) in order of self.camera_names
+        """
+        # 1. Construct input batch
+        batch = {}
+        
+        # State
+        if "observation.state" in self.policy.config.input_features:
+            batch["observation.state"] = qpos
+            
+        # Images
+        for i, env_cam_name in enumerate(self.camera_names):
+            policy_key = self._camera_key_mapping[env_cam_name]
+            batch[policy_key] = images[:, i] # (B, 3, H, W)
+            
+        # 2. Preprocess (Normalize)
+        batch = self.preprocessor(batch)
+        
+        # 3. Inference
+        with torch.no_grad():
+            action = self.policy.select_action(batch)
+            
+        # 4. Postprocess (Unnormalize)
+        action = self.postprocessor(action)
+        
+        return action
+
+    def reset(self):
+        self.policy.reset()

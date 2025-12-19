@@ -31,8 +31,8 @@ from isaaclab.app import AppLauncher
 parser = argparse.ArgumentParser(description="Standardized Policy Deployment for Competition")
 parser.add_argument("--num_envs", type=int, default=1, help="Number of parallel environments")
 parser.add_argument("--task", type=str, default="Template-Galaxea-Lab-External-Direct-v0", help="Task name")
-parser.add_argument("--policy_type", type=str, required=True, choices=['act', 'diffusion', 'bc', 'replay'], 
-                    help="Policy type (act/diffusion/bc/replay)")
+parser.add_argument("--policy_type", type=str, required=True, choices=['act', 'diffusion', 'bc', 'replay', 'lerobot'], 
+                    help="Policy type (act/diffusion/bc/replay/lerobot)")
 parser.add_argument("--checkpoint", type=str, required=True, help="Path to policy checkpoint or data file (for replay)")
 parser.add_argument("--num_episodes", type=int, default=10, help="Number of evaluation episodes")
 parser.add_argument("--save_video", action="store_true", help="Save episode videos")
@@ -57,7 +57,7 @@ import Galaxea_Lab_External.tasks
 
 # Import policy wrapper
 sys.path.insert(0, str(Path(__file__).parent))
-from policy_wrapper import ACTPolicyWrapper, DiffusionPolicyWrapper, BCPolicyWrapper, DataReplayPolicyWrapper
+from policy_wrapper import ACTPolicyWrapper, DiffusionPolicyWrapper, BCPolicyWrapper, DataReplayPolicyWrapper, LeRobotPolicyWrapper
 
 
 def load_replay_actions(data_path: str):
@@ -118,16 +118,19 @@ def load_policy(policy_type: str, checkpoint_path: str, **kwargs):
         return BCPolicyWrapper(checkpoint_path)
     elif policy_type == 'replay':
         return DataReplayPolicyWrapper(checkpoint_path)
+    elif policy_type == 'lerobot':
+        return LeRobotPolicyWrapper(checkpoint_path)
     else:
         raise ValueError(f"Unknown policy type: {policy_type}")
 
 
-def get_observations(env, policy_wrapper):
+def get_observations(obs, env, policy_wrapper):
     """
-    Get observations from environment in policy format.
+    Get observations from environment observation dict in policy format.
     
     Args:
-        env: Isaac Lab environment
+        obs: Observation dictionary returned by env.reset() or env.step()
+        env: Isaac Lab environment (kept for device/indices access if needed)
         policy_wrapper: Policy wrapper instance
     
     Returns:
@@ -136,55 +139,69 @@ def get_observations(env, policy_wrapper):
     """
     device = policy_wrapper.device
     
-    # Get joint positions from environment
-    # Use environment's joint indices to get the correct 14 DoF
-    # (left_arm: 6, right_arm: 6, left_gripper: 1, right_gripper: 1)
-    env_unwrapped = env.unwrapped
-    robot = env_unwrapped.scene["robot"]
+    # Extract inner dict if wrapped (e.g. 'policy' key)
+    # Galaxea environment returns structure: {'policy': {'head_rgb': ..., 'left_arm_joint_pos': ...}}
+    if isinstance(obs, dict) and 'policy' in obs:
+        curr_obs = obs['policy']
+    else:
+        curr_obs = obs
+
+    # --- 1. Get Joint Positions (QPOS) ---
+    # The environment returns separate tensors for arms and grippers. We must concatenate them.
+    # Keys from GalaxeaEnv: 
+    # 'left_arm_joint_pos', 'right_arm_joint_pos', 'left_gripper_joint_pos', 'right_gripper_joint_pos'
     
-    # Concatenate joint positions in correct order
-    left_arm_pos = robot.data.joint_pos[:, env_unwrapped._left_arm_joint_idx]
-    right_arm_pos = robot.data.joint_pos[:, env_unwrapped._right_arm_joint_idx]
-    left_gripper_pos = robot.data.joint_pos[:, env_unwrapped._left_gripper_dof_idx]
-    right_gripper_pos = robot.data.joint_pos[:, env_unwrapped._right_gripper_dof_idx]
+    try:
+        left_arm = curr_obs['left_arm_joint_pos']
+        right_arm = curr_obs['right_arm_joint_pos']
+        left_grip = curr_obs['left_gripper_joint_pos']
+        right_grip = curr_obs['right_gripper_joint_pos']
+        
+        # Ensure dimensions match (batch, dim). Grippers might be (batch,) or (batch, 1)
+        if left_grip.dim() == 1: left_grip = left_grip.unsqueeze(1)
+        if right_grip.dim() == 1: right_grip = right_grip.unsqueeze(1)
+        
+        # Concatenate: [left_arm(6), right_arm(6), left_gripper(1), right_gripper(1)]
+        # Check shapes
+        # print(f"DEBUG QPOS shapes: L_Arm={left_arm.shape} R_Arm={right_arm.shape} L_Grip={left_grip.shape} R_Grip={right_grip.shape}")
+        
+        qpos = torch.cat([left_arm, right_arm, left_grip, right_grip], dim=-1).to(device)
+        
+    except KeyError as e:
+        print(f"Error extracting joint positions from observation. Available keys: {curr_obs.keys()}")
+        raise e
+
+    # --- 2. Get Camera Images ---
+    # Keys from GalaxeaEnv: 'head_rgb', 'left_hand_rgb', 'right_hand_rgb'
+    # Expected by Env: (batch, H, W, 3) usually?
+    # Policy Expects: (batch, num_cams, 3, H, W)
     
-    # Concatenate: [left_arm(6), right_arm(6), left_gripper(1), right_gripper(1)]
-    joint_pos = torch.cat([
-        left_arm_pos,
-        right_arm_pos,
-        left_gripper_pos,
-        right_gripper_pos
-    ], dim=-1)  # (num_envs, 14)
-    
-    qpos = joint_pos.clone().to(device)
-    
-    # Get camera images
     camera_images = []
-    camera_name_mapping = {
-        'head_rgb': 'head_camera',
-        'left_hand_rgb': 'left_hand_camera',
-        'right_hand_rgb': 'right_hand_camera'
-    }
+    
+    # Map 'standard names' used in wrapper to 'keys' in observation dict
+    # Wrapper standard names: 'head_rgb', 'left_hand_rgb', 'right_hand_rgb'
+    # Environment keys match these exactly in GalaxeaEnv.
     
     for cam_name in policy_wrapper.camera_names:
-        sensor_name = camera_name_mapping.get(cam_name)
-        if sensor_name is None:
-            raise ValueError(f"Unknown camera name: {cam_name}")
+        if cam_name not in curr_obs:
+             raise ValueError(f"Required camera '{cam_name}' not found in observation. Keys: {curr_obs.keys()}")
         
-        # Get RGB image from sensor (shape: num_envs, H, W, C)
-        rgb_data = env.unwrapped.scene[sensor_name].data.output["rgb"]  # (num_envs, 240, 320, 3)
+        rgb_tensor = curr_obs[cam_name] # (batch, H, W, 3) or (batch, 3, H, W)? check env implementation
         
-        # Convert to tensor and rearrange to (num_envs, C, H, W)
-        rgb_tensor = rgb_data.clone()  # (num_envs, 240, 320, 3)
-        rgb_tensor = rgb_tensor.permute(0, 3, 1, 2)  # (num_envs, 3, 240, 320)
+        # GalaxeaEnv uses `self.head_camera.data.output[data_type]`. Isaac Lab Camera output is usually (N, H, W, C).
+        # Let's verify shape at runtime or assume (N, H, W, C).
         
-        # Normalize to [0, 1] if needed
-        if rgb_tensor.max() > 1.0:
-            rgb_tensor = rgb_tensor / 255.0
+        if rgb_tensor.shape[-1] == 3:
+            # Permute to (N, C, H, W)
+            rgb_tensor = rgb_tensor.permute(0, 3, 1, 2)
         
+        # Normalize to [0, 1] if needed (uint8 check)
+        if rgb_tensor.dtype == torch.uint8 or rgb_tensor.max() > 1.0:
+            rgb_tensor = rgb_tensor.float() / 255.0
+            
         camera_images.append(rgb_tensor)
     
-    # Stack all cameras: (num_envs, num_cameras, 3, H, W)
+    # Stack: (batch, num_cameras, 3, H, W)
     images = torch.stack(camera_images, dim=1).to(device)
     
     return qpos, images
@@ -224,7 +241,7 @@ def run_episode(env, policy_wrapper, episode_idx: int, save_video: bool = False)
     
     while True:
         # Get observations in policy format
-        qpos, images = get_observations(env, policy_wrapper)
+        qpos, images = get_observations(obs, env, policy_wrapper)
         
         # Predict action
         with torch.no_grad():

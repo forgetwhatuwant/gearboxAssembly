@@ -1,0 +1,24 @@
+
+# Verify Dataset (Random Episode)
+python source/Galaxea_Lab_External/Galaxea_Lab_External/VLA/ACT/verify_lerobot_dataset.py \
+    --dataset_dir /media/hls/MK-ssd-mini/isaac_sim_data/lerobot_datasets/roco_gearbox_full \
+    --random
+
+# Training Command (Multi-GPU)
+PYTHONPATH=lerobot/src accelerate launch \
+    --multi_gpu \
+    --num_processes=2 \
+    --mixed_precision=fp16 \
+    lerobot/src/lerobot/scripts/lerobot_train.py \
+    --policy.type=act \
+    --dataset.repo_id=galaxea/roco_gearbox_full \
+    --dataset.root=/media/hls/MK-ssd-mini/isaac_sim_data/lerobot_datasets/roco_gearbox_full \
+    --output_dir=/media/hls/MK-ssd-mini/isaac_sim_data/act_roco_gearbox_cb \
+    --job_name=act_roco_gearbox_cb \
+    --batch_size=16 \
+    --steps=15000 \
+    --save_freq=10000 \
+    --eval_freq=0 \
+    --wandb.enable=true
+
+     accelerate launch     --multi_gpu     --num_processes 2     --mixed_precision bf16     $(which lerobot-train)     --policy.type=act     --policy.repo_id=hls/act_roco_gearbox_updated     --policy.push_to_hub=false     --dataset.repo_id=galaxea/roco_gearbox_updated     --dataset.root=./datasets/roco_gearbox_updated     --eval_freq=0     --save_freq=10000     --output_dir=./outputs/act_roco_gearbox_updated     --batch_size=24     --steps=20000     --wandb.enable=true
