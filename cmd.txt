@@ -22,3 +22,5 @@ PYTHONPATH=lerobot/src accelerate launch \
     --wandb.enable=true
 
      accelerate launch     --multi_gpu     --num_processes 2     --mixed_precision bf16     $(which lerobot-train)     --policy.type=act     --policy.repo_id=hls/act_roco_gearbox_updated     --policy.push_to_hub=false     --dataset.repo_id=galaxea/roco_gearbox_updated     --dataset.root=./datasets/roco_gearbox_updated     --eval_freq=0     --save_freq=10000     --output_dir=./outputs/act_roco_gearbox_updated     --batch_size=24     --steps=20000     --wandb.enable=true
+
+python source/Galaxea_Lab_External/Galaxea_Lab_External/VLA/ACT/deploy_policy.py --policy_type lerobot --checkpoint outputs/train/act_galaxea/checkpoints/020000/pretrained_model --task Template-Galaxea-Lab-External-Direct-v0 --num_episodes 1 --enable_cameras
