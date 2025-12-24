@@ -114,7 +114,7 @@ The **gearbox part models (`.usd` files)** within this repository are managed us
     ```bash
     python scripts/rule_based_agent.py --task=Gearbox-Recovery-Misplacedfourth --enable_cameras
     ```
-    The fourth gear is inclined during installation, for task 3. Rule-based agent do not perform well in this setting, and thus not provided yet. Use --no_action flag to diable actions when checking out the environment.
+    The fourth gear is inclined during installation, for task 3. Rule-based agent do not perform well in this setting, and thus not provided yet. Use --no_action flag to disable actions when checking out the environment.
     ```bash
     python scripts/rule_based_agent.py --task=Gearbox-Recovery-Inclinedfourth --enable_cameras --no_action
     ```
