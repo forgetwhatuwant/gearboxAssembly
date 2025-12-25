@@ -14,9 +14,137 @@ import torch
 import numpy as np
 import h5py
 from abc import ABC, abstractmethod
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Any
 import sys
 import os
+import time
+import pickle
+import threading
+import io
+import grpc
+from queue import Queue, Empty
+from dataclasses import dataclass
+from types import ModuleType
+
+# Add LeRobot transport to path to import generated protobufs
+lerobot_path = "/home/hls/codes/gearboxAssembly/lerobot/src"
+if os.path.exists(lerobot_path) and lerobot_path not in sys.path:
+    sys.path.append(lerobot_path)
+
+try:
+    from lerobot.transport import services_pb2
+    from lerobot.transport import services_pb2_grpc
+except ImportError:
+    # Try relative path backup
+    lerobot_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../../../../lerobot/src'))
+    if os.path.exists(lerobot_path) and lerobot_path not in sys.path:
+        sys.path.append(lerobot_path)
+    
+    try:
+        from lerobot.transport import services_pb2
+        from lerobot.transport import services_pb2_grpc
+    except ImportError:
+        print("⚠ Warning: Could not import LeRobot transport. RemotePolicyWrapper will not work.")
+
+# --- Local Transport Utilities (to avoid heavy LeRobot deps) ---
+CHUNK_SIZE = 2 * 1024 * 1024  # 2 MB
+
+def send_bytes_in_chunks(buffer: bytes, message_class: Any):
+    """Generator to split bytes into gRPC messages."""
+    bytes_buffer = io.BytesIO(buffer)
+    bytes_buffer.seek(0, io.SEEK_END)
+    size_in_bytes = bytes_buffer.tell()
+    bytes_buffer.seek(0)
+    
+    sent_bytes = 0
+    while sent_bytes < size_in_bytes:
+        transfer_state = services_pb2.TransferState.TRANSFER_MIDDLE
+        if sent_bytes + CHUNK_SIZE >= size_in_bytes:
+            transfer_state = services_pb2.TransferState.TRANSFER_END
+        elif sent_bytes == 0:
+            transfer_state = services_pb2.TransferState.TRANSFER_BEGIN
+            
+        size_to_read = min(CHUNK_SIZE, size_in_bytes - sent_bytes)
+        chunk = bytes_buffer.read(size_to_read)
+        
+        yield message_class(transfer_state=transfer_state, data=chunk)
+        sent_bytes += size_to_read
+
+def receive_bytes_in_chunks(iterator) -> bytes:
+    """Reassemble bytes from gRPC message stream."""
+    bytes_buffer = io.BytesIO()
+    
+    for item in iterator:
+        if item.transfer_state == services_pb2.TransferState.TRANSFER_BEGIN:
+            bytes_buffer.seek(0)
+            bytes_buffer.truncate(0)
+            bytes_buffer.write(item.data)
+        elif item.transfer_state == services_pb2.TransferState.TRANSFER_MIDDLE:
+            bytes_buffer.write(item.data)
+        elif item.transfer_state == services_pb2.TransferState.TRANSFER_END:
+            bytes_buffer.write(item.data)
+            return bytes_buffer.getvalue()
+    
+    return bytes_buffer.getvalue()
+
+# --- Pickle Compatibility Mocking ---
+# We mock the module structure so pickle finds our local classes when looking up 
+# 'lerobot.async_inference.helpers.<ClassName>'
+mock_module_name = "lerobot.async_inference.helpers"
+
+def _mock_module(name):
+    if name not in sys.modules:
+        sys.modules[name] = ModuleType(name)
+    return sys.modules[name]
+
+# Ensure parent modules exist
+_mock_module("lerobot")
+_mock_module("lerobot.async_inference")
+fake_helpers = _mock_module(mock_module_name)
+
+@dataclass
+class RemotePolicyConfig:
+    """Minimal config to send to server."""
+    policy_type: str
+    pretrained_name_or_path: str
+    lerobot_features: dict
+    actions_per_chunk: int
+    device: str = "cpu"
+    rename_map: dict | None = None
+
+RemotePolicyConfig.__module__ = mock_module_name
+fake_helpers.RemotePolicyConfig = RemotePolicyConfig
+
+@dataclass
+class TimedData:
+    timestamp: float
+    timestep: int
+    
+    def get_timestamp(self): return self.timestamp
+    def get_timestep(self): return self.timestep
+
+TimedData.__module__ = mock_module_name
+fake_helpers.TimedData = TimedData
+
+@dataclass
+class TimedObservation(TimedData):
+    observation: dict
+    must_go: bool = False
+    
+    def get_observation(self): return self.observation
+
+TimedObservation.__module__ = mock_module_name
+fake_helpers.TimedObservation = TimedObservation
+
+@dataclass
+class TimedAction(TimedData):
+    action: torch.Tensor
+    
+    def get_action(self): return self.action
+
+TimedAction.__module__ = mock_module_name
+fake_helpers.TimedAction = TimedAction
+
 
 
 class PolicyWrapper(ABC):
@@ -116,6 +244,8 @@ class ACTPolicyWrapper(PolicyWrapper):
         # Normalization statistics (will be loaded from dataset_stats.pkl)
         self.action_mean = None
         self.action_std = None
+        self.qpos_mean = None
+        self.qpos_std = None
         
         # Delayed import to avoid argparse conflicts
         self._load_act_policy()
@@ -170,6 +300,18 @@ class ACTPolicyWrapper(PolicyWrapper):
                     stats = pickle.load(f)
                 self.action_mean = torch.from_numpy(stats['action_mean']).float().to(self._device)
                 self.action_std = torch.from_numpy(stats['action_std']).float().to(self._device)
+                
+                # Also load qpos stats if available
+                if 'qpos_mean' in stats:
+                    self.qpos_mean = torch.from_numpy(stats['qpos_mean']).float().to(self._device)
+                    self.qpos_std = torch.from_numpy(stats['qpos_std']).float().to(self._device)
+                    print(f"  - Qpos mean range: [{self.qpos_mean.min():.3f}, {self.qpos_mean.max():.3f}]")
+                    print(f"  - Qpos std range: [{self.qpos_std.min():.3f}, {self.qpos_std.max():.3f}]")
+                else:
+                    self.qpos_mean = None
+                    self.qpos_std = None
+                    print(f"⚠ Warning: No qpos stats found in dataset_stats.pkl")
+
                 print(f"✓ Loaded normalization stats from {stats_path}")
                 print(f"  - Action mean range: [{self.action_mean.min():.3f}, {self.action_mean.max():.3f}]")
                 print(f"  - Action std range: [{self.action_std.min():.3f}, {self.action_std.max():.3f}]")
@@ -189,8 +331,8 @@ class ACTPolicyWrapper(PolicyWrapper):
     
     @property
     def required_control_frequency(self) -> float:
-        """ACT requires 50 Hz control frequency."""
-        return 50.0
+        """ACT requires 20 Hz control frequency (modified for user setup)."""
+        return 20.0
     
     @property
     def device(self) -> torch.device:
@@ -208,6 +350,10 @@ class ACTPolicyWrapper(PolicyWrapper):
             actions: Predicted action (batch_size, 14) - DENORMALIZED to real joint positions
         """
         with torch.no_grad():
+            # Normalize qpos
+            if self.qpos_mean is not None and self.qpos_std is not None:
+                qpos = (qpos - self.qpos_mean) / self.qpos_std
+                
             # Get action chunk from policy (normalized outputs)
             all_actions = self.policy(qpos, images)  # (batch_size, num_queries, 14)
             
@@ -600,7 +746,7 @@ class LeRobotPolicyWrapper(PolicyWrapper):
         """Get required control frequency from config if available."""
         if hasattr(self.policy.config, "fps") and self.policy.config.fps:
             return float(self.policy.config.fps)
-        return 50.0  # Default to 50Hz for ACT/Diffusion if unknown
+        return 20.0  # Default to 20Hz (match training data) if unknown
 
     @property
     def camera_names(self) -> list:
@@ -644,3 +790,210 @@ class LeRobotPolicyWrapper(PolicyWrapper):
 
     def reset(self):
         self.policy.reset()
+
+
+class RemotePolicyWrapper(PolicyWrapper):
+    """
+    Client wrapper that talks to a remote LeRobot Policy Server.
+    Decouples the simulator (Python 3.11) from the policy (Python 3.10).
+    """
+    
+    def __init__(
+        self, 
+        host: str = "127.0.0.1", 
+        port: int = 8080, 
+        policy_type: str = "lerobot",
+        checkpoint: str = None,
+        lerobot_policy_type: str = None
+    ):
+        self.server_address = f"{host}:{port}"
+        self._device = torch.device("cpu") # Communication handles device properties
+        
+        # Connect to server
+        print(f"\nconnecting to Policy Server at {self.server_address}...")
+        self.channel = grpc.insecure_channel(self.server_address)
+        self.stub = services_pb2_grpc.AsyncInferenceStub(self.channel)
+        
+        try:
+            # Handshake
+            self.stub.Ready(services_pb2.Empty())
+            print("✓ Connected to server")
+        except grpc.RpcError as e:
+            print(f"❌ Failed to connect to server: {e}")
+            raise ConnectionError(f"Could not connect to Policy Server at {self.server_address}")
+
+        # Send policy config
+        # We need to map our environment features to LeRobot features
+        # Note: In a full implementation, we'd inspect the robot/env config.
+        # Here we hardcode common defaults or use the provided types.
+        
+        # Heuristic: Map standard camera names to assumed LeRobot features
+        # This mirrors 'map_robot_keys_to_lerobot_features' logic:
+        # We need to define "observation.state" with a list of "names" corresponding to the keys in raw_obs
+        
+        # 1. Define the joint names we will send in raw_obs
+        # We must simply list 14 scalar names so build_dataset_frame stacks them into a (14,) vector.
+        state_names = [f"joint_{i}" for i in range(14)]
+        
+        self.lerobot_features = {
+            "observation.images.head": {"dtype": "image", "shape": (3, 240, 320), "names": ["channels", "height", "width"]},
+            "observation.images.left_wrist": {"dtype": "image", "shape": (3, 240, 320), "names": ["channels", "height", "width"]},
+            "observation.images.right_wrist": {"dtype": "image", "shape": (3, 240, 320), "names": ["channels", "height", "width"]},
+            "observation.state": {
+                "dtype": "float32", 
+                "shape": (14,), 
+                "names": state_names
+            }
+        }
+        
+        # If specific policy type passed, use it, else default to 'act' or similar logic
+        # For simplicity, we assume 'lerobot' generally or pass the subtype
+        actual_type = lerobot_policy_type if lerobot_policy_type else (policy_type if policy_type != 'lerobot' else 'act')
+        
+        policy_config = RemotePolicyConfig(
+            policy_type=actual_type,
+            pretrained_name_or_path=checkpoint,
+            lerobot_features=self.lerobot_features, # Full implementation might need precise mapping
+            actions_per_chunk=200, # Default
+            device="cuda", # Server should use cuda
+            rename_map={}
+        )
+        
+        print(f"Sending policy config: {actual_type} from {checkpoint}")
+        config_bytes = pickle.dumps(policy_config)
+        self.stub.SendPolicyInstructions(services_pb2.PolicySetup(data=config_bytes))
+        
+        self.timestep = 0
+        
+        # Action queue for async/temporal behavior
+        self.action_queue = Queue()
+        self.latest_action_step = -1
+        
+    def predict(self, qpos: torch.Tensor, images: torch.Tensor) -> torch.Tensor:
+        """
+        Send observation to server, get action back.
+        This blocks for simplicity in this wrapper, but server is async capable.
+        """
+        # 1. Prepare observation dict for transport
+        # The keys here must match the "names" list in self.lerobot_features["observation.state"]
+        
+        raw_obs = {}
+        
+        # Qpos: Decompose into 14 scalars
+        # Assumes qpos is (B, 14), we take first batch item B=0
+        qpos_cpu = qpos[0].cpu() # (14,)
+        for i in range(14):
+            raw_obs[f"joint_{i}"] = qpos_cpu[i].item() # Send as python float
+            
+        # Images: [head, left_hand, right_hand]
+        # We needs to send (H, W, C) for server helper compatibility (it does permute(2,0,1))
+        # Input images is (B, N, C, H, W). We take B=0.
+        
+        mapping = {
+            'head_rgb': 'head',
+            'left_hand_rgb': 'left_wrist',
+            'right_hand_rgb': 'right_wrist'
+        }
+        
+        for i, env_name in enumerate(self.camera_names):
+             # Extract (C, H, W) -> Permute to (H, W, C) -> CPU
+             img_tensor = images[0, i].permute(1, 2, 0).cpu() # (H, W, C)
+             
+             if env_name in mapping:
+                 raw_obs[mapping[env_name]] = img_tensor
+             else:
+                 # Fallback
+                 raw_obs[env_name] = img_tensor
+             
+        # Add task name if needed (dummy here)
+        raw_obs["task"] = "remote_deployment"
+        
+        # Create TimedObservation
+        obs_obj = TimedObservation(
+            timestamp=time.time(),
+            observation=raw_obs,
+            timestep=self.timestep,
+            must_go=True # Force inference for this step
+        )
+        
+        # 2. Send Observation
+        obs_bytes = pickle.dumps(obs_obj)
+        obs_iter = send_bytes_in_chunks(
+            obs_bytes, 
+            services_pb2.Observation
+        )
+        self.stub.SendObservations(obs_iter)
+        
+        # 3. Request Actions
+        # In a true async loop, we'd poll. Here we block until we get the action for THIS timestep.
+        # But the server sends chunks. We might get a chunk covering [t, t+50].
+        
+        # Simple blocking retry loop
+        action_tensor = None
+        max_retries = 100
+        
+        # Check local queue first
+        action_tensor = self._get_from_queue(self.timestep)
+        
+        if action_tensor is None:
+            # Poll server
+            for _ in range(max_retries):
+                response = self.stub.GetActions(services_pb2.Empty())
+                if len(response.data) > 0:
+                    # Parse actions
+                    # returns list[TimedAction]
+                                # GetActions returns a single Actions message with the complete pickled data
+                    actions = pickle.loads(response.data)
+                    
+                    # Add to queue
+                    for ta in actions:
+                         # Merge/Update logic: simply overwrite or add
+                         self.action_queue.put(ta)
+                    
+                    # Try getting again
+                    action_tensor = self._get_from_queue(self.timestep)
+                    if action_tensor is not None:
+                        break
+                
+                time.sleep(0.01)
+                
+        if action_tensor is None:
+            print(f"Warning: Timed out waiting for action at step {self.timestep}")
+            # Fail-safe: reuse last action or zero? 
+            # For now return zeros to avoid crash, but robot will stop
+            action_tensor = torch.zeros(1, 14, device=qpos.device)
+            
+        self.timestep += 1
+        return action_tensor.to(qpos.device)
+
+    def _get_from_queue(self, timestep):
+        # Scan queue (inefficient but safe for simple wrapper)
+        # We need to look for exact timestep match
+        
+        # NOTE: The queue might contain old actions. We should clean up?
+        # For this prototype, we just search.
+        
+        # Snapshot current queue
+        temp_list = []
+        found_action = None
+        
+        while not self.action_queue.empty():
+            item = self.action_queue.get()
+            if item.timestep == timestep:
+                found_action = item.action
+                # We found it! We can discard older actions? 
+                # Ideally yes, but let's keep future ones.
+            
+            if item.timestep >= timestep:
+                temp_list.append(item)
+                
+        # Put back future items
+        for item in temp_list:
+            self.action_queue.put(item)
+            
+        return found_action
+
+    @property
+    def required_control_frequency(self) -> Optional[float]:
+        return 20.0 # Assumed default for now
+

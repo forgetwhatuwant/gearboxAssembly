@@ -79,9 +79,9 @@ def batch_convert():
                         default="/home/hls/.cache/huggingface/hub/datasets--rocochallenge2025--rocochallenge2025/snapshots/76a5691156397e249cf9b8f568d37407c302d724/gearbox_assembly_demos_updated",
                         help="Path to source HDF5 files")
     parser.add_argument("--out_dir", type=str, 
-                        default="/media/hls/MK-ssd-mini/isaac_sim_data/lerobot_datasets/roco_gearbox_updated",
+                        default="/media/hls/MK-ssd-mini/isaac_sim_data/lerobot_datasets/roco_gearbox_updated_no_offset",
                         help="Output directory for LeRobot dataset")
-    parser.add_argument("--repo_id", type=str, default="galaxea/roco_gearbox_updated", help="Repo ID")
+    parser.add_argument("--repo_id", type=str, default="galaxea/roco_gearbox_updated_no_offset", help="Repo ID")
     parser.add_argument("--fps", type=int, default=20)
     args = parser.parse_args()
 

@@ -21,6 +21,101 @@ PYTHONPATH=lerobot/src accelerate launch \
     --eval_freq=0 \
     --wandb.enable=true
 
-     accelerate launch     --multi_gpu     --num_processes 2     --mixed_precision bf16     $(which lerobot-train)     --policy.type=act     --policy.repo_id=hls/act_roco_gearbox_updated     --policy.push_to_hub=false     --dataset.repo_id=galaxea/roco_gearbox_updated     --dataset.root=./datasets/roco_gearbox_updated     --eval_freq=0     --save_freq=10000     --output_dir=./outputs/act_roco_gearbox_updated     --batch_size=24     --steps=20000     --wandb.enable=true
+ python /home/hls/codes/gearboxAssembly/source/Galaxea_Lab_External/Galaxea_Lab_External/VLA/ACT/deploy_policy.py --policy_type lerobot --checkpoint /home/hls/codes/gearboxAssembly/lerobot/outputs/act_roco_gearbox_updated/checkpoints/020000/pretrained_model --lerobot_policy_type act --num_episodes 1 --num_envs 1 --task Template-Galaxea-Lab-External-Direct-v0 --enable_cameras
 
-python source/Galaxea_Lab_External/Galaxea_Lab_External/VLA/ACT/deploy_policy.py --policy_type lerobot --checkpoint outputs/train/act_galaxea/checkpoints/020000/pretrained_model --task Template-Galaxea-Lab-External-Direct-v0 --num_episodes 1 --enable_cameras
+python src/lerobot/scripts/lerobot_train.py \
+    --policy.type=act \
+    --dataset.repo_id=galaxea/roco_gearbox_updated_no_offset \
+    --dataset.root=/media/hls/MK-ssd-mini/isaac_sim_data/lerobot_datasets/roco_gearbox_updated_no_offset \
+    --output_dir=outputs/act_roco_gearbox_updated_no_offset \
+    --job_name=act_roco_gearbox_updated_no_offset \
+    --batch_size=8 \
+    --steps=20000 \
+    --save_freq=1000 \
+    --eval_freq=1000 \
+    --wandb.enable=true \
+    --policy.push_to_hub=false
+
+lerobot-train \
+  --dataset.repo_id=galaxea/roco_gearbox_updated_no_offset \
+  --dataset.root=/media/hls/MK-ssd-mini/isaac_sim_data/lerobot_datasets/roco_gearbox_updated_no_offset \
+  --output_dir=outputs/xvla_roco_gearbox_updated_no_offset \
+  --job_name=xvla_roco_gearbox_updated_no_offset \
+  --policy.path="lerobot/xvla-base" \
+  --policy.dtype=bfloat16 \
+  --policy.repo_id="xvla-roco-gearbox-updated-no-offset" \
+  --steps=25000 \
+  --policy.device=cuda \
+  --policy.action_mode=auto \
+  --policy.freeze_vision_encoder=false \
+  --policy.freeze_language_encoder=false \
+  --policy.train_policy_transformer=true \
+  --policy.train_soft_prompts=true
+
+PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True python src/lerobot/scripts/lerobot_train.py\
+    --dataset.repo_id=galaxea/roco_gearbox_updated_no_offset \
+    --dataset.root=/home/admin/Desktop/lerobot_datasets/roco_gearbox_updated_no_offset_v3.0 \
+    --policy.type=pi05 \
+    --output_dir=./outputs/pi05_roco_gearbox_updated_no_offset_training \
+    --job_name=pi05_roco_gearbox_updated_no_offset_training \
+    --policy.pretrained_path=lerobot/pi05_base \
+    --policy.compile_model=false \
+    --policy.gradient_checkpointing=true \
+    --output_dir=outputs/pi05_roco_gearbox_updated_no_offset \
+    --policy.push_to_hub=false \
+    --wandb.enable=true \
+    --policy.dtype=bfloat16 \
+    --steps=25000 \
+    --save_freq=5000 \
+    --eval_freq=5000 \
+    --policy.device=cuda \
+    --batch_size=4
+
+PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True python src/lerobot/scripts/lerobot_train.py \
+    --policy.type=groot \
+    --dataset.repo_id=galaxea/roco_gearbox_updated_no_offset \
+    --dataset.root=/home/admin/Desktop/lerobot_datasets/roco_gearbox_updated_no_offset_v3.0 \
+    --output_dir=outputs/groot_roco_gearbox_updated_no_offset \
+    --job_name=groot_roco_gearbox_updated_no_offset \
+    --steps=25000 \
+    --save_freq=5000 \
+    --eval_freq=5000 \
+    --log_freq=500 \
+    --batch_size=8 \
+    --save_checkpoint=true \
+    --policy.device=cuda \
+    --policy.push_to_hub=false \
+    --policy.repo_id=galaxea/groot_roco_gearbox_updated_no_offset \
+    --policy.tune_diffusion_model=false \
+    --wandb.enable=true
+
+CUDA_VISIBLE_DEVICES=1 no_proxy=127.0.0.1,localhost python -m lerobot.async_inference.policy_server \
+  --host 0.0.0.0 \
+  --port 8080 \
+  --fps 30 \
+  --inference_latency 0
+
+
+CUDA_VISIBLE_DEVICES=0 no_proxy=127.0.0.1,localhost python /home/hls/codes/gearboxAssembly/source/Galaxea_Lab_External/Galaxea_Lab_External/VLA/ACT/deploy_policy.py \
+  --policy_type remote \
+  --lerobot_policy_type pi05 \
+  --checkpoint /home/hls/codes/gearboxAssembly/lerobot/outputs/pi05_roco_gearbox_updated_no_offset/checkpoints/010000/pretrained_model \
+  --task Template-Galaxea-Lab-External-Direct-v0 \
+  --num_episodes 1 \
+  --num_envs 1 \
+  --enable_cameras \
+  --host 127.0.0.1 \
+  --port 8080
+
+
+
+CUDA_VISIBLE_DEVICES=0 no_proxy=127.0.0.1,localhost python /home/hls/codes/gearboxAssembly/source/Galaxea_Lab_External/Galaxea_Lab_External/VLA/ACT/deploy_policy.py \
+  --policy_type remote \
+  --lerobot_policy_type groot \
+  --checkpoint /home/hls/codes/gearboxAssembly/lerobot/outputs/groot_roco_gearbox_updated_no_offset/checkpoints/005000/pretrained_model \
+  --task Template-Galaxea-Lab-External-Direct-v0 \
+  --num_episodes 1 \
+  --num_envs 1 \
+  --enable_cameras \
+  --host 127.0.0.1 \
+  --port 8080

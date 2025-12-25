@@ -14,7 +14,7 @@ from isaaclab.sensors import CameraCfg
 import math
 
 # from isaaclab.sim.spawners.from_files.from_files_cfg import UsdFileCfg
-# from isaaclab.sim.schemas.schemas_cfg import RigidBodyPropertiesCfg
+from isaaclab.sim.schemas.schemas_cfg import RigidBodyPropertiesCfg, ArticulationRootPropertiesCfg
 # from isaaclab.assets import ArticulationCfg, AssetBaseCfg, RigidObjectCfg
 # from isaaclab.scene import InteractiveScene, InteractiveSceneCfg
 # from isaaclab.sim import SimulationContext
@@ -59,7 +59,12 @@ class GalaxeaLabExternalEnvCfg(DirectRLEnvCfg):
     robot_cfg: ArticulationCfg = GALAXEA_R1_CHALLENGE_CFG.replace(prim_path="/World/envs/env_.*/Robot")
 
     # table_cfg: AssetBaseCfg = TABLE_CFG.copy()
-    table_cfg: RigidObjectCfg = TABLE_CFG.replace(prim_path="/World/envs/env_.*/Table")
+    table_cfg: RigidObjectCfg = TABLE_CFG.replace(
+        prim_path="/World/envs/env_.*/Table",
+        spawn=TABLE_CFG.spawn.replace(
+            articulation_props=ArticulationRootPropertiesCfg(articulation_enabled=False)
+        )
+    )
 
     ring_gear_cfg: RigidObjectCfg = RING_GEAR_CFG.replace(prim_path="/World/envs/env_.*/ring_gear",
                                                                        init_state=RigidObjectCfg.InitialStateCfg(
@@ -106,9 +111,9 @@ class GalaxeaLabExternalEnvCfg(DirectRLEnvCfg):
     gripper_friction_coefficient = 2.0
 
     # Camera
-    head_camera_cfg: CameraCfg = GALAXEA_HEAD_CAMERA_CFG.replace(prim_path="/World/envs/env_.*/Robot/zed_link/head_cam/head_cam")
-    left_hand_camera_cfg: CameraCfg = GALAXEA_HAND_CAMERA_CFG.replace(prim_path="/World/envs/env_.*/Robot/left_realsense_link/left_hand_cam/left_hand_cam")
-    right_hand_camera_cfg: CameraCfg = GALAXEA_HAND_CAMERA_CFG.replace(prim_path="/World/envs/env_.*/Robot/right_realsense_link/right_hand_cam/right_hand_cam")
+    head_camera_cfg: CameraCfg = GALAXEA_HEAD_CAMERA_CFG.replace(prim_path="/World/envs/env_.*/Robot/zed_link/head_cam/head_cam", height=240, width=320)
+    left_hand_camera_cfg: CameraCfg = GALAXEA_HAND_CAMERA_CFG.replace(prim_path="/World/envs/env_.*/Robot/left_realsense_link/left_hand_cam/left_hand_cam", height=240, width=320)
+    right_hand_camera_cfg: CameraCfg = GALAXEA_HAND_CAMERA_CFG.replace(prim_path="/World/envs/env_.*/Robot/right_realsense_link/right_hand_cam/right_hand_cam", height=240, width=320)
 
     # scene
     scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=1, env_spacing=4.0, replicate_physics=True)

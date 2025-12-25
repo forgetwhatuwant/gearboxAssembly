@@ -49,6 +49,9 @@ class GalaxeaLabExternalEnv(DirectRLEnv):
         self._left_gripper_dof_idx, _ = self.robot.find_joints(self.cfg.left_gripper_dof_name)
         self._right_gripper_dof_idx, _ = self.robot.find_joints(self.cfg.right_gripper_dof_name)
 
+        print(f"DEBUG: Robot Joint Names: {self.robot.joint_names}")
+        print(f"DEBUG: Robot Num Dof: {self.robot.num_joints}")
+
         self._left_arm_action = torch.zeros(self._left_arm_joint_idx, device=self.device)
         self._right_arm_action = torch.zeros(self._right_arm_joint_idx, device=self.device)
         self._left_gripper_action = torch.zeros(1, device=self.device)

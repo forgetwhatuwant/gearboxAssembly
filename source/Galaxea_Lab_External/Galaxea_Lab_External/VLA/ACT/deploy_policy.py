@@ -31,13 +31,15 @@ from isaaclab.app import AppLauncher
 parser = argparse.ArgumentParser(description="Standardized Policy Deployment for Competition")
 parser.add_argument("--num_envs", type=int, default=1, help="Number of parallel environments")
 parser.add_argument("--task", type=str, default="Template-Galaxea-Lab-External-Direct-v0", help="Task name")
-parser.add_argument("--policy_type", type=str, required=True, choices=['act', 'diffusion', 'bc', 'replay', 'lerobot'], 
-                    help="Policy type (act/diffusion/bc/replay/lerobot)")
+parser.add_argument("--policy_type", type=str, required=True, choices=['act', 'diffusion', 'bc', 'replay', 'lerobot', 'remote'], 
+                    help="Policy type (act/diffusion/bc/replay/lerobot/remote)")
 parser.add_argument("--checkpoint", type=str, required=True, help="Path to policy checkpoint or data file (for replay)")
 parser.add_argument("--num_episodes", type=int, default=10, help="Number of evaluation episodes")
 parser.add_argument("--save_video", action="store_true", help="Save episode videos")
 parser.add_argument("--temporal_agg", action="store_true", default=True, help="Use temporal aggregation (for ACT)")
-
+parser.add_argument("--lerobot_policy_type", type=str, default=None, help="Explicitly specify LeRobot policy type (act, diffusion, etc.)")
+parser.add_argument("--host", type=str, default="127.0.0.1", help="Remote policy server host")
+parser.add_argument("--port", type=int, default=8080, help="Remote policy server port")
 # Add AppLauncher arguments
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
@@ -57,7 +59,7 @@ import Galaxea_Lab_External.tasks
 
 # Import policy wrapper
 sys.path.insert(0, str(Path(__file__).parent))
-from policy_wrapper import ACTPolicyWrapper, DiffusionPolicyWrapper, BCPolicyWrapper, DataReplayPolicyWrapper, LeRobotPolicyWrapper
+from policy_wrapper import ACTPolicyWrapper, DiffusionPolicyWrapper, BCPolicyWrapper, DataReplayPolicyWrapper, LeRobotPolicyWrapper, RemotePolicyWrapper
 
 
 def load_replay_actions(data_path: str):
@@ -119,7 +121,12 @@ def load_policy(policy_type: str, checkpoint_path: str, **kwargs):
     elif policy_type == 'replay':
         return DataReplayPolicyWrapper(checkpoint_path)
     elif policy_type == 'lerobot':
-        return LeRobotPolicyWrapper(checkpoint_path)
+        return LeRobotPolicyWrapper(checkpoint_path, policy_type=kwargs.get('lerobot_policy_type'))
+    elif policy_type == 'remote':
+        host = kwargs.get('host', '127.0.0.1')
+        port = kwargs.get('port', 8080)
+        # If user passed lerobot_policy_type, also pass it
+        return RemotePolicyWrapper(host=host, port=port, checkpoint=checkpoint_path, lerobot_policy_type=kwargs.get('lerobot_policy_type'))
     else:
         raise ValueError(f"Unknown policy type: {policy_type}")
 
@@ -370,7 +377,10 @@ def main():
         policy_wrapper = load_policy(
             args_cli.policy_type,
             args_cli.checkpoint,
-            temporal_agg=args_cli.temporal_agg
+            temporal_agg=args_cli.temporal_agg,
+            lerobot_policy_type=args_cli.lerobot_policy_type,
+            host=args_cli.host,
+            port=args_cli.port
         )
         replay_actions = None
     

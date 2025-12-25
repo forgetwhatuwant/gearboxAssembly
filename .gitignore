@@ -76,3 +76,9 @@ log
 
 # Training model
 ckpt
+# Temporary and large files
+check_hf.py
+*.png
+
+# Ignore lerobot changes if possible (though submodule changes require different handling)
+lerobot/
