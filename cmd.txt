@@ -119,3 +119,5 @@ CUDA_VISIBLE_DEVICES=0 no_proxy=127.0.0.1,localhost python /home/hls/codes/gearb
   --enable_cameras \
   --host 127.0.0.1 \
   --port 8080
+
+conda activate env_isaaclab && python scripts/rule_based_agent.py --task=Template-Galaxea-Sun-Gear-3-v0 --enable_cameras --num_envs 2

@@ -60,12 +60,26 @@ def main():
     print(f"[INFO]: Gym action space: {env.action_space}")
     # reset environment
     env.reset()
+    
+    # Set viewport camera to head_cam perspective
+    try:
+        import omni.kit.viewport.utility as viewport_utils
+        # Get the active viewport and set camera to head_cam prim
+        viewport = viewport_utils.get_active_viewport()
+        if viewport:
+            head_cam_prim_path = "/World/envs/env_0/Robot/zed_link/head_cam/head_cam"
+            viewport.set_active_camera(head_cam_prim_path)
+            print(f"[INFO]: Viewport camera set to head_cam: {head_cam_prim_path}")
+    except Exception as e:
+        print(f"[WARN]: Could not set viewport to head_cam: {e}")
     # simulate environment
     while simulation_app.is_running():
         # run everything in inference mode
         with torch.inference_mode():
-            # sample actions from -1 to 1
-            actions = 2 * torch.rand(env.action_space.shape, device=env.unwrapped.device) - 1
+            # The environment handles the rule-based policy internally.
+            # We just need to pass a dummy action to step().
+            actions = torch.zeros(env.action_space.shape, device=env.unwrapped.device)
+            
             # apply actions
             obs, reward, terminated, truncated, info = env.step(actions)
 

@@ -28,7 +28,7 @@ def load_roco_updated_episode(file_path):
             states = np.concatenate([l_arm_pos, r_arm_pos, l_grip_pos, r_grip_pos], axis=1)
 
             # --- ACTIONS (REAL) ---
-            # Reading from the 'actions' group which is valid in the 'updated' dataset
+            # Reading from the 'actions' group - NO OFFSET applied
             act_l_arm = f['actions/left_arm_action'][:]
             act_l_grip = f['actions/left_gripper_action'][:]
             act_r_arm = f['actions/right_arm_action'][:]
@@ -36,16 +36,6 @@ def load_roco_updated_episode(file_path):
 
             if act_l_grip.ndim == 1: act_l_grip = act_l_grip[:, None]
             if act_r_grip.ndim == 1: act_r_grip = act_r_grip[:, None]
-
-            # --- GRIPPER OFFSET LOGIC ---
-            # Real actions are ~0.03 (weak). We apply -0.01 to force them towards 0.0 (strong grasp).
-            OFFSET = 0.01
-            act_l_grip = act_l_grip - OFFSET
-            act_r_grip = act_r_grip - OFFSET
-            
-            # Clip to valid range [0.0, 0.04]
-            act_l_grip = np.clip(act_l_grip, 0.0, 0.04)
-            act_r_grip = np.clip(act_r_grip, 0.0, 0.04)
 
             # Concatenate actions (L=14)
             actions = np.concatenate([act_l_arm, act_r_arm, act_l_grip, act_r_grip], axis=1)
@@ -85,8 +75,9 @@ def batch_convert():
     parser.add_argument("--fps", type=int, default=20)
     args = parser.parse_args()
 
-    # Find files
+    # Find files (support both .hdf5 and .h5 extensions)
     files = sorted(glob.glob(os.path.join(args.raw_dir, "*.hdf5")))
+    files.extend(sorted(glob.glob(os.path.join(args.raw_dir, "*.h5"))))
     print(f"Found {len(files)} HDF5 files in {args.raw_dir}")
     if len(files) == 0:
         print("No files found! Check path.")

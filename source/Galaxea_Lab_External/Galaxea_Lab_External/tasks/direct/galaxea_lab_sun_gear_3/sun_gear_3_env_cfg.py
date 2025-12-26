@@ -9,22 +9,11 @@ from isaaclab.assets import ArticulationCfg, AssetBaseCfg, RigidObjectCfg
 from isaaclab.envs import DirectRLEnvCfg
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sim import SimulationCfg
-import isaaclab.sim as sim_utils
-from isaaclab.sim.schemas.schemas_cfg import ArticulationRootPropertiesCfg
 from isaaclab.utils import configclass
 from isaaclab.sensors import CameraCfg
 import math
 
-# from isaaclab.sim.spawners.from_files.from_files_cfg import UsdFileCfg
-# from isaaclab.sim.schemas.schemas_cfg import RigidBodyPropertiesCfg
-# from isaaclab.assets import ArticulationCfg, AssetBaseCfg, RigidObjectCfg
-# from isaaclab.scene import InteractiveScene, InteractiveSceneCfg
-# from isaaclab.sim import SimulationContext
-# from isaaclab.utils import configclass
-# from isaaclab.controllers import (
-#     DifferentialIKController,
-#     DifferentialIKControllerCfg,
-# )
+from isaaclab.sim.schemas.schemas_cfg import RigidBodyPropertiesCfg, ArticulationRootPropertiesCfg
 
 from Galaxea_Lab_External.robots import (
     GALAXEA_R1_CHALLENGE_CFG,
@@ -38,11 +27,11 @@ from Galaxea_Lab_External.robots import (
 )
 
 @configclass
-class GalaxeaLabExternalEnvCfg(DirectRLEnvCfg):
+class SunGear3EnvCfg(DirectRLEnvCfg):
 
     # Record data
     record_data = True
-    record_freq = 5
+    record_freq = 1  # Record every env step for 20Hz (sim_dt=0.01, decimation=5 -> 20Hz env)
 
     # env
     sim_dt = 0.01
@@ -60,7 +49,6 @@ class GalaxeaLabExternalEnvCfg(DirectRLEnvCfg):
     # robot(s)
     robot_cfg: ArticulationCfg = GALAXEA_R1_CHALLENGE_CFG.replace(prim_path="/World/envs/env_.*/Robot")
 
-    # table_cfg: AssetBaseCfg = TABLE_CFG.copy()
     table_cfg: RigidObjectCfg = TABLE_CFG.replace(
         prim_path="/World/envs/env_.*/Table",
         spawn=TABLE_CFG.spawn.replace(
@@ -73,7 +61,6 @@ class GalaxeaLabExternalEnvCfg(DirectRLEnvCfg):
                                                                            pos=(0.45, 0.0, 1.0),
                                                                            rot=(1.0, 0.0, 0.0, 0.0),
                                                                        ))
-
 
     sun_planetary_gear_1_cfg: RigidObjectCfg = SUN_PLANETARY_GEAR_CFG.replace(prim_path="/World/envs/env_.*/sun_planetary_gear_1",
                                                                        init_state=RigidObjectCfg.InitialStateCfg(
@@ -96,6 +83,7 @@ class GalaxeaLabExternalEnvCfg(DirectRLEnvCfg):
                                                                            pos=(0.55, -0.3, 1.0),
                                                                            rot=(1.0, 0.0, 0.0, 0.0),
                                                                        ))
+
     planetary_carrier_cfg: RigidObjectCfg = PLANETARY_CARRIER_CFG.replace(prim_path="/World/envs/env_.*/planetary_carrier",
                                                                        init_state=RigidObjectCfg.InitialStateCfg(
                                                                            pos=(0.5, 0.25, 1.0),
@@ -104,18 +92,18 @@ class GalaxeaLabExternalEnvCfg(DirectRLEnvCfg):
     planetary_reducer_cfg: RigidObjectCfg = PLANETARY_REDUCER_CFG.replace(prim_path="/World/envs/env_.*/planetary_reducer",
                                                                        init_state=RigidObjectCfg.InitialStateCfg(
                                                                            pos=(0.3, 0.1, 1.0),
-                                                                        #    rot=(0.7071068 , 0.0, 0.0, 0.7071068),
                                                                            rot=(1.0, 0.0, 0.0, 0.0),
                                                                        ))
+   
     # Physics
     table_friction_coefficient = 0.4
     gears_friction_coefficient = 0.01
     gripper_friction_coefficient = 2.0
 
     # Camera
-    head_camera_cfg: CameraCfg = GALAXEA_HEAD_CAMERA_CFG.replace(prim_path="/World/envs/env_.*/Robot/zed_link/head_cam/head_cam")
-    left_hand_camera_cfg: CameraCfg = GALAXEA_HAND_CAMERA_CFG.replace(prim_path="/World/envs/env_.*/Robot/left_realsense_link/left_hand_cam/left_hand_cam")
-    right_hand_camera_cfg: CameraCfg = GALAXEA_HAND_CAMERA_CFG.replace(prim_path="/World/envs/env_.*/Robot/right_realsense_link/right_hand_cam/right_hand_cam")
+    head_camera_cfg: CameraCfg = GALAXEA_HEAD_CAMERA_CFG.replace(prim_path="/World/envs/env_.*/Robot/zed_link/head_cam/head_cam", height=240, width=320)
+    left_hand_camera_cfg: CameraCfg = GALAXEA_HAND_CAMERA_CFG.replace(prim_path="/World/envs/env_.*/Robot/left_realsense_link/left_hand_cam/left_hand_cam", height=240, width=320)
+    right_hand_camera_cfg: CameraCfg = GALAXEA_HAND_CAMERA_CFG.replace(prim_path="/World/envs/env_.*/Robot/right_realsense_link/right_hand_cam/right_hand_cam", height=240, width=320)
 
     # scene
     scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=1, env_spacing=4.0, replicate_physics=True)

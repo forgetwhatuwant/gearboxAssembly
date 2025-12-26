@@ -5,7 +5,7 @@
 # Note: To activate conda in a script, you need to source conda.sh first
 # Please modify the path below according to your actual installation, typically ~/anaconda3/etc/profile.d/conda.sh or ~/miniconda3/...
 source ~/miniconda3/etc/profile.d/conda.sh
-conda activate roco
+conda activate env_isaaclab
 
 # Define the command to run
 CMD="python scripts/rule_based_agent.py --task=Gearbox-Recovery-Misplacedfourth --enable_cameras"

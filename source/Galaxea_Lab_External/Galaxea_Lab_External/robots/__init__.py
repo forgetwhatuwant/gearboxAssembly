@@ -12,3 +12,5 @@ from .galaxea_assets import *
 from .gears_assets import *
 from .galaxea_rule_policy import *
 from .recovery_rule_policy import *
+from .sun_gear_3_rule_policy import *
+from .sun_gear_6_rule_policy import *

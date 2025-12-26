@@ -815,11 +815,9 @@ class GalaxeaLabExternalEnv(DirectRLEnv):
 
 
         print(f"Generate action at {current_time_s.item()} seconds")
-        print(f"Action: {action}")
-        # Overriding rule policy to use input action for verification/training
-        # self.env_step_action, self.env_step_joint_ids = self.rule_policy.get_action()
-        self.env_step_action = action
-        self.env_step_joint_ids = self._joint_idx
+        # Use the internal rule policy to generate actions
+        self.env_step_action, self.env_step_joint_ids = self.rule_policy.get_action()
+        print(f"Action: {self.env_step_action}")
 
 
         # perform physics stepping
