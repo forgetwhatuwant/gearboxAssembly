@@ -100,10 +100,18 @@ class SunGear3Env(DirectRLEnv):
             '/current_time': [],
         }
         
-        # Counter to wait 5 seconds after success before terminating
-        self.success_wait_steps = 40  # 5 seconds at 20Hz
-        self.success_wait_counter = 0
+        # Success validation - require consecutive steps (matches official Isaac Lab pattern)
+        self.num_success_steps_required = 10  # Official default from record_demos.py
+        self.success_step_count = 0
         self.task_completed = False
+        
+        # Recording statistics
+        self.recording_stats = {
+            'episodes_saved': 0,
+            'episodes_discarded': 0,
+            'frames_recorded': 0,
+            'frames_skipped_nan': 0,
+        }
 
     def _setup_scene(self):
 
@@ -220,22 +228,18 @@ class SunGear3Env(DirectRLEnv):
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
         time_out = self.episode_length_buf >= self.max_episode_length - 1
         
-        # Check if task is completed (3 gears mounted)
-        if self.score >= 3 and not self.task_completed:
-            self.task_completed = True
-            self.success_wait_counter = 0
-            print(f"Task completed! Waiting {self.success_wait_steps / 20.0:.1f}s before reset...")
-        
-        # Wait 1 second after success before terminating
-        if self.task_completed:
-            self.success_wait_counter += 1
-            if self.success_wait_counter >= self.success_wait_steps:
-                terminated = torch.tensor([True], device=self.device)
-            else:
-                terminated = torch.tensor([False], device=self.device)
+        # Consecutive success steps pattern (from official record_demos.py)
+        # Requires N continuous steps with success before concluding episode
+        if self.score >= 3:
+            self.success_step_count += 1
+            if self.success_step_count >= self.num_success_steps_required and not self.task_completed:
+                self.task_completed = True
+                print(f"Success condition met! {self.success_step_count} consecutive steps with score >= 3")
         else:
-            terminated = torch.tensor([False], device=self.device)
+            # Reset counter if score drops (prevents false positives)
+            self.success_step_count = 0
         
+        terminated = torch.tensor([self.task_completed], device=self.device)
         return terminated, time_out
 
     def _reset_idx(self, env_ids: Sequence[int] | None):
@@ -255,13 +259,18 @@ class SunGear3Env(DirectRLEnv):
 
         self.score = 0
         self.task_completed = False
-        self.success_wait_counter = 0
+        self.success_step_count = 0
 
         # Reset Table
         root_state = self.table.data.default_root_state.clone()
         self.table.write_root_state_to_sim(root_state)
 
-        self.save_hdf5_file_name = f"data_sun_gear_3_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.h5"
+        # Ensure data directory exists and set save path
+        os.makedirs(self.cfg.data_dir, exist_ok=True)
+        self.save_hdf5_file_name = os.path.join(
+            self.cfg.data_dir, 
+            f"data_sun_gear_3_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.h5"
+        )
 
         # Randomize object positions
         self.initial_root_state = self._randomize_object_positions(
@@ -347,15 +356,22 @@ class SunGear3Env(DirectRLEnv):
 
         reset_env_ids = self.reset_buf.nonzero(as_tuple=False).squeeze(-1)
         if len(reset_env_ids) > 0:
-            # Only save successful episodes (terminated = score >= 3)
+            # Only save successful episodes (terminated = consecutive success steps met)
             if self.reset_terminated.any():
-                print(f"Episode successful! Score: {self.score}. Writing data to hdf5 file")
+                num_frames = len(self.data_dict['/observations/head_rgb'])
+                print(f"Episode successful! Score: {self.score}, Frames: {num_frames}. Saving...")
                 self._write_hdf5()
+                self.recording_stats['episodes_saved'] += 1
             else:
                 print(f"Episode timeout/failed. Score: {self.score}. Discarding data.")
+                self.recording_stats['episodes_discarded'] += 1
                 # Clear the data buffer without saving
                 for key in self.data_dict:
                     self.data_dict[key] = []
+            
+            # Log stats periodically
+            if (self.recording_stats['episodes_saved'] + self.recording_stats['episodes_discarded']) % 5 == 0:
+                self._log_recording_stats()
             
             self._reset_idx(reset_env_ids)
             if self.sim.has_rtx_sensors() and self.cfg.num_rerenders_on_reset > 0:
@@ -542,60 +558,121 @@ class SunGear3Env(DirectRLEnv):
         return initial_root_state
 
     def _record_data(self):
-        self.data_dict['/observations/head_rgb'].append(self.obs['head_rgb'].cpu().numpy().squeeze(0))
-        self.data_dict['/observations/left_hand_rgb'].append(self.obs['left_hand_rgb'].cpu().numpy().squeeze(0))
-        self.data_dict['/observations/right_hand_rgb'].append(self.obs['right_hand_rgb'].cpu().numpy().squeeze(0))
+        """Record a single frame of data with validation."""
+        # Extract data
+        left_arm_pos = self.obs['left_arm_joint_pos'].cpu().numpy().squeeze(0)
+        right_arm_pos = self.obs['right_arm_joint_pos'].cpu().numpy().squeeze(0)
+        left_gripper_pos = self.obs['left_gripper_joint_pos'].cpu().numpy()[0].squeeze(0)
+        right_gripper_pos = self.obs['right_gripper_joint_pos'].cpu().numpy()[0].squeeze(0)
         
-        self.data_dict['/observations/left_arm_joint_pos'].append(self.obs['left_arm_joint_pos'].cpu().numpy().squeeze(0))
-        self.data_dict['/observations/right_arm_joint_pos'].append(self.obs['right_arm_joint_pos'].cpu().numpy().squeeze(0))
-        self.data_dict['/observations/left_gripper_joint_pos'].append(self.obs['left_gripper_joint_pos'].cpu().numpy()[0].squeeze(0))
-        self.data_dict['/observations/right_gripper_joint_pos'].append(self.obs['right_gripper_joint_pos'].cpu().numpy()[0].squeeze(0))
+        left_arm_act = self.act['left_arm_action'].cpu().numpy().squeeze(0)
+        right_arm_act = self.act['right_arm_action'].cpu().numpy().squeeze(0)
+        left_gripper_act = self.act['left_gripper_action'].cpu().numpy()[0].squeeze(0)
+        right_gripper_act = self.act['right_gripper_action'].cpu().numpy()[0].squeeze(0)
         
-        self.data_dict['/actions/left_arm_action'].append(self.act['left_arm_action'].cpu().numpy().squeeze(0))
-        self.data_dict['/actions/right_arm_action'].append(self.act['right_arm_action'].cpu().numpy().squeeze(0))
-        self.data_dict['/actions/left_gripper_action'].append(self.act['left_gripper_action'].cpu().numpy()[0].squeeze(0))
-        self.data_dict['/actions/right_gripper_action'].append(self.act['right_gripper_action'].cpu().numpy()[0].squeeze(0))
+        # Check for NaN/Inf values - skip frame if any invalid found
+        has_invalid = (
+            np.isnan(left_arm_pos).any() or np.isnan(right_arm_pos).any() or 
+            np.isnan(left_gripper_pos) or np.isnan(right_gripper_pos) or
+            np.isnan(left_arm_act).any() or np.isnan(right_arm_act).any() or
+            np.isnan(left_gripper_act) or np.isnan(right_gripper_act) or
+            np.isinf(left_arm_pos).any() or np.isinf(right_arm_pos).any() or
+            np.isinf(left_arm_act).any() or np.isinf(right_arm_act).any()
+        )
+        
+        if has_invalid:
+            self.recording_stats['frames_skipped_nan'] += 1
+            print(f"[WARN] Skipping invalid frame at t={self.rule_policy.count * self.sim.get_physics_dt():.3f}s")
+            return
+        
+        # Record images (handle RGBA -> RGB if needed)
+        head_rgb = self.obs['head_rgb'].cpu().numpy().squeeze(0)
+        left_rgb = self.obs['left_hand_rgb'].cpu().numpy().squeeze(0)
+        right_rgb = self.obs['right_hand_rgb'].cpu().numpy().squeeze(0)
+        
+        if head_rgb.shape[-1] == 4:
+            head_rgb = head_rgb[..., :3]
+            left_rgb = left_rgb[..., :3]
+            right_rgb = right_rgb[..., :3]
+        
+        self.data_dict['/observations/head_rgb'].append(head_rgb)
+        self.data_dict['/observations/left_hand_rgb'].append(left_rgb)
+        self.data_dict['/observations/right_hand_rgb'].append(right_rgb)
+        
+        self.data_dict['/observations/left_arm_joint_pos'].append(left_arm_pos)
+        self.data_dict['/observations/right_arm_joint_pos'].append(right_arm_pos)
+        self.data_dict['/observations/left_gripper_joint_pos'].append(left_gripper_pos)
+        self.data_dict['/observations/right_gripper_joint_pos'].append(right_gripper_pos)
+        
+        self.data_dict['/actions/left_arm_action'].append(left_arm_act)
+        self.data_dict['/actions/right_arm_action'].append(right_arm_act)
+        self.data_dict['/actions/left_gripper_action'].append(left_gripper_act)
+        self.data_dict['/actions/right_gripper_action'].append(right_gripper_act)
 
         self.data_dict['/score'].append(self.score)
         self.data_dict['/current_time'].append(self.rule_policy.count * self.sim.get_physics_dt())
+        
+        self.recording_stats['frames_recorded'] += 1
 
     def _write_hdf5(self):
+        """Write episode data to HDF5 file with compression and metadata."""
+        num_items = len(self.data_dict['/observations/head_rgb'])
+        if num_items == 0:
+            print("[WARN] No frames to save, skipping HDF5 write")
+            return
+            
         with h5py.File(self.save_hdf5_file_name, 'w') as f:
+            # Episode metadata
             f.attrs['sim'] = True
+            f.attrs['num_frames'] = num_items
+            f.attrs['final_score'] = int(self.score)
+            f.attrs['timestamp'] = datetime.now().isoformat()
+            f.attrs['task'] = 'sun_gear_3'
+            f.attrs['success_steps_required'] = self.num_success_steps_required
+            
             obs = f.create_group('observations')
             act = f.create_group('actions')
-            num_items = len(self.data_dict['/observations/head_rgb'])
-            obs.create_dataset('head_rgb', shape=(num_items, 240, 320, 3), dtype='uint8')
-            obs.create_dataset('left_hand_rgb', shape=(num_items, 240, 320, 3), dtype='uint8')
-            obs.create_dataset('right_hand_rgb', shape=(num_items, 240, 320, 3), dtype='uint8')
-            obs.create_dataset('left_arm_joint_pos', shape=(num_items, 6), dtype='float32')
-            obs.create_dataset('right_arm_joint_pos', shape=(num_items, 6), dtype='float32')
-            obs.create_dataset('left_gripper_joint_pos', shape=(num_items, ), dtype='float32')
-            obs.create_dataset('right_gripper_joint_pos', shape=(num_items, ), dtype='float32')
-            act.create_dataset('left_arm_action', shape=(num_items, 6), dtype='float32')
-            act.create_dataset('right_arm_action', shape=(num_items, 6), dtype='float32')
-            act.create_dataset('left_gripper_action', shape=(num_items, ), dtype='float32')
-            act.create_dataset('right_gripper_action', shape=(num_items, ), dtype='float32')
             
-            f.create_dataset('score', shape=(num_items,), dtype='int32')
-            f.create_dataset('current_time', shape=(num_items,), dtype='float32')
-
-            for name, value in self.data_dict.items():
-                f[name][...] = value
+            # Images with GZIP compression (significant size reduction)
+            obs.create_dataset('head_rgb', data=np.array(self.data_dict['/observations/head_rgb']),
+                             dtype='uint8', compression='gzip', compression_opts=4)
+            obs.create_dataset('left_hand_rgb', data=np.array(self.data_dict['/observations/left_hand_rgb']),
+                             dtype='uint8', compression='gzip', compression_opts=4)
+            obs.create_dataset('right_hand_rgb', data=np.array(self.data_dict['/observations/right_hand_rgb']),
+                             dtype='uint8', compression='gzip', compression_opts=4)
+            
+            # Joint data (no compression needed for small arrays)
+            obs.create_dataset('left_arm_joint_pos', data=np.array(self.data_dict['/observations/left_arm_joint_pos']), dtype='float32')
+            obs.create_dataset('right_arm_joint_pos', data=np.array(self.data_dict['/observations/right_arm_joint_pos']), dtype='float32')
+            obs.create_dataset('left_gripper_joint_pos', data=np.array(self.data_dict['/observations/left_gripper_joint_pos']), dtype='float32')
+            obs.create_dataset('right_gripper_joint_pos', data=np.array(self.data_dict['/observations/right_gripper_joint_pos']), dtype='float32')
+            
+            act.create_dataset('left_arm_action', data=np.array(self.data_dict['/actions/left_arm_action']), dtype='float32')
+            act.create_dataset('right_arm_action', data=np.array(self.data_dict['/actions/right_arm_action']), dtype='float32')
+            act.create_dataset('left_gripper_action', data=np.array(self.data_dict['/actions/left_gripper_action']), dtype='float32')
+            act.create_dataset('right_gripper_action', data=np.array(self.data_dict['/actions/right_gripper_action']), dtype='float32')
+            
+            f.create_dataset('score', data=np.array(self.data_dict['/score']), dtype='int32')
+            f.create_dataset('current_time', data=np.array(self.data_dict['/current_time']), dtype='float32')
         
-        self.data_dict = {
-            '/observations/head_rgb': [],
-            '/observations/left_hand_rgb': [],
-            '/observations/right_hand_rgb': [],
-            '/observations/left_arm_joint_pos': [],
-            '/observations/right_arm_joint_pos': [],
-            '/observations/left_gripper_joint_pos': [],
-            '/observations/right_gripper_joint_pos': [],
-            '/actions/left_arm_action': [],
-            '/actions/right_arm_action': [],
-            '/actions/left_gripper_action': [],
-            '/actions/right_gripper_action': [],
-            '/score': [],
-            '/current_time': [],
-        }
+        print(f"[SUCCESS] Saved: {self.save_hdf5_file_name} ({num_items} frames)")
+        
+        # Clear buffer for next episode
+        for key in self.data_dict:
+            self.data_dict[key] = []
 
+    def _log_recording_stats(self):
+        """Log recording statistics."""
+        stats = self.recording_stats
+        total_eps = stats['episodes_saved'] + stats['episodes_discarded']
+        success_rate = stats['episodes_saved'] / total_eps * 100 if total_eps > 0 else 0
+        
+        print(f"\n{'='*50}")
+        print(f"RECORDING STATISTICS")
+        print(f"{'='*50}")
+        print(f"  Episodes saved:     {stats['episodes_saved']}")
+        print(f"  Episodes discarded: {stats['episodes_discarded']}")
+        print(f"  Success rate:       {success_rate:.1f}%")
+        print(f"  Frames recorded:    {stats['frames_recorded']}")
+        print(f"  Frames skipped:     {stats['frames_skipped_nan']} (invalid)")
+        print(f"{'='*50}\n")

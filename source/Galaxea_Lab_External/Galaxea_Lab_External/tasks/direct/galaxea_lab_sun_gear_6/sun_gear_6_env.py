@@ -262,7 +262,12 @@ class SunGear6Env(DirectRLEnv):
         root_state = self.table.data.default_root_state.clone()
         self.table.write_root_state_to_sim(root_state)
 
-        self.save_hdf5_file_name = f"data_sun_gear_6_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.h5"
+        # Ensure data directory exists and set save path
+        os.makedirs(self.cfg.data_dir, exist_ok=True)
+        self.save_hdf5_file_name = os.path.join(
+            self.cfg.data_dir, 
+            f"data_sun_gear_6_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.h5"
+        )
 
         # For Stage 2: Pre-assemble gears 1-3 on pins, randomize remaining parts
         # First randomize carrier and parts that go on table

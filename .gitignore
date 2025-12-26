@@ -82,3 +82,9 @@ check_hf.py
 
 # Ignore lerobot changes if possible (though submodule changes require different handling)
 lerobot/
+
+# Ignore lerobot datasets directory
+lerobot_datasets/
+
+# Ignore HDF5 data files
+*.h5

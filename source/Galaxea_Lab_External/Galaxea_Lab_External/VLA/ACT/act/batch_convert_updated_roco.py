@@ -40,6 +40,15 @@ def load_roco_updated_episode(file_path):
             # Concatenate actions (L=14)
             actions = np.concatenate([act_l_arm, act_r_arm, act_l_grip, act_r_grip], axis=1)
 
+            # --- Handle NaN values (forward-fill with previous value) ---
+            nan_count_states = np.isnan(states).sum()
+            nan_count_actions = np.isnan(actions).sum()
+            if nan_count_states > 0 or nan_count_actions > 0:
+                print(f"Warning {file_path}: Found NaN values (states:{nan_count_states}, actions:{nan_count_actions}), forward-filling")
+                import pandas as pd
+                states = pd.DataFrame(states).ffill().bfill().values  # ffill then bfill for any leading NaN
+                actions = pd.DataFrame(actions).ffill().bfill().values
+
             # --- IMAGES ---
             head_rgb = f['observations/head_rgb'][:]
             left_hand_rgb = f['observations/left_hand_rgb'][:]

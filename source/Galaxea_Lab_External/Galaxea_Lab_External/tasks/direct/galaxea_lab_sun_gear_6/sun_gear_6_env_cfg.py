@@ -33,6 +33,7 @@ class SunGear6EnvCfg(DirectRLEnvCfg):
     # Record data
     record_data = True
     record_freq = 1  # Record every env step for 20Hz (sim_dt=0.01, decimation=5 -> 20Hz env)
+    data_dir = "./data"  # Directory to save recorded HDF5 files
 
     # env
     sim_dt = 0.01
@@ -103,10 +104,10 @@ class SunGear6EnvCfg(DirectRLEnvCfg):
     gears_friction_coefficient = 0.01
     gripper_friction_coefficient = 2.0
 
-    # Camera
-    head_camera_cfg: CameraCfg = GALAXEA_HEAD_CAMERA_CFG.replace(prim_path="/World/envs/env_.*/Robot/zed_link/head_cam/head_cam", height=240, width=320)
-    left_hand_camera_cfg: CameraCfg = GALAXEA_HAND_CAMERA_CFG.replace(prim_path="/World/envs/env_.*/Robot/left_realsense_link/left_hand_cam/left_hand_cam", height=240, width=320)
-    right_hand_camera_cfg: CameraCfg = GALAXEA_HAND_CAMERA_CFG.replace(prim_path="/World/envs/env_.*/Robot/right_realsense_link/right_hand_cam/right_hand_cam", height=240, width=320)
+    # Camera (480p resolution for VLA training)
+    head_camera_cfg: CameraCfg = GALAXEA_HEAD_CAMERA_CFG.replace(prim_path="/World/envs/env_.*/Robot/zed_link/head_cam/head_cam", height=480, width=640)
+    left_hand_camera_cfg: CameraCfg = GALAXEA_HAND_CAMERA_CFG.replace(prim_path="/World/envs/env_.*/Robot/left_realsense_link/left_hand_cam/left_hand_cam", height=480, width=640)
+    right_hand_camera_cfg: CameraCfg = GALAXEA_HAND_CAMERA_CFG.replace(prim_path="/World/envs/env_.*/Robot/right_realsense_link/right_hand_cam/right_hand_cam", height=480, width=640)
 
     # scene
     scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=1, env_spacing=4.0, replicate_physics=True)

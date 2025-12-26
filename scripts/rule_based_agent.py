@@ -20,6 +20,8 @@ parser.add_argument(
 parser.add_argument("--num_envs", type=int, default=None, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
 parser.add_argument("--no_action", action="store_true", default=False, help="Do not apply actions to the robot.")
+parser.add_argument("--data_dir", type=str, default="./data", help="Directory to save recorded data.")
+parser.add_argument("--num_episodes", type=int, default=0, help="Number of episodes to record (0=infinite).")
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
@@ -49,15 +51,27 @@ def main():
     env_cfg = parse_env_cfg(
         args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs, use_fabric=not args_cli.disable_fabric
     )
+    
+    # Override data directory in config before creating environment
+    if hasattr(env_cfg, 'data_dir'):
+        env_cfg.data_dir = args_cli.data_dir
+        print(f"[INFO]: Data will be saved to: {args_cli.data_dir}")
+    
     # create environment
     env = gym.make(args_cli.task, cfg=env_cfg, use_action=not args_cli.no_action)
-
-    # sample_every_n_steps = max(int(sample_period / env.step_dt), 1)
-    print("env type: ", type(env))
 
     # print info (this is vectorized environment)
     print(f"[INFO]: Gym observation space: {env.observation_space}")
     print(f"[INFO]: Gym action space: {env.action_space}")
+    
+    # Episode tracking
+    episode_count = 0
+    target_episodes = args_cli.num_episodes
+    if target_episodes > 0:
+        print(f"[INFO]: Will record {target_episodes} episodes then exit")
+    else:
+        print(f"[INFO]: Running indefinitely (Ctrl+C to stop)")
+    
     # reset environment
     env.reset()
     
@@ -72,6 +86,7 @@ def main():
             print(f"[INFO]: Viewport camera set to head_cam: {head_cam_prim_path}")
     except Exception as e:
         print(f"[WARN]: Could not set viewport to head_cam: {e}")
+    
     # simulate environment
     while simulation_app.is_running():
         # run everything in inference mode
@@ -83,11 +98,15 @@ def main():
             # apply actions
             obs, reward, terminated, truncated, info = env.step(actions)
 
-            print(f"Terminated: {terminated}")
-            print(f"Truncated: {truncated}")
-            # env.step(actions)
-            # if terminated or truncated:
-            #     env.reset()
+            # Check if episode ended
+            if terminated.any() or truncated.any():
+                episode_count += 1
+                print(f"\n[INFO]: Episode {episode_count} completed")
+                
+                # Check if we've reached target episodes
+                if target_episodes > 0 and episode_count >= target_episodes:
+                    print(f"\n[SUCCESS]: Completed {episode_count} episodes. Exiting...")
+                    break
 
     # close the simulator
     env.close()
@@ -98,3 +117,4 @@ if __name__ == "__main__":
     main()
     # close sim app
     simulation_app.close()
+

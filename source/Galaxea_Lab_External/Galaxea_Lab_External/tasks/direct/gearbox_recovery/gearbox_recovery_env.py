@@ -956,12 +956,12 @@ class GalaxeaLabExternalEnv(DirectRLEnv):
                 obs = f.create_group('observations')
                 act = f.create_group('actions')
                 num_items = len(self.data_dict['/observations/head_rgb'])
-                obs.create_dataset('head_rgb', shape=(num_items, 240, 320, 3), dtype='uint8')
-                obs.create_dataset('left_hand_rgb', shape=(num_items, 240, 320, 3), dtype='uint8')
-                obs.create_dataset('right_hand_rgb', shape=(num_items, 240, 320, 3), dtype='uint8')
-                obs.create_dataset('head_depth', shape=(num_items, 240, 320), dtype='float32')
-                obs.create_dataset('left_hand_depth', shape=(num_items, 240, 320), dtype='float32')
-                obs.create_dataset('right_hand_depth', shape=(num_items, 240, 320), dtype='float32')
+                obs.create_dataset('head_rgb', shape=(num_items, 480, 640, 3), dtype='uint8')
+                obs.create_dataset('left_hand_rgb', shape=(num_items, 480, 640, 3), dtype='uint8')
+                obs.create_dataset('right_hand_rgb', shape=(num_items, 480, 640, 3), dtype='uint8')
+                obs.create_dataset('head_depth', shape=(num_items, 480, 640), dtype='float32')
+                obs.create_dataset('left_hand_depth', shape=(num_items, 480, 640), dtype='float32')
+                obs.create_dataset('right_hand_depth', shape=(num_items, 480, 640), dtype='float32')
                 obs.create_dataset('left_arm_joint_pos', shape=(num_items, 6), dtype='float32')
                 obs.create_dataset('right_arm_joint_pos', shape=(num_items, 6), dtype='float32')
                 obs.create_dataset('left_gripper_joint_pos', shape=(num_items, ), dtype='float32')
@@ -1100,6 +1100,27 @@ class GalaxeaLabExternalEnv(DirectRLEnv):
         print("*******Write data into memory*******")
         start_time = time.time()
 
+        # Extract data first
+        left_arm_pos = self.obs['left_arm_joint_pos'].cpu().numpy().squeeze(0)
+        right_arm_pos = self.obs['right_arm_joint_pos'].cpu().numpy().squeeze(0)
+        left_gripper_pos = self.obs['left_gripper_joint_pos'].cpu().numpy()[0].squeeze(0)
+        right_gripper_pos = self.obs['right_gripper_joint_pos'].cpu().numpy()[0].squeeze(0)
+        
+        left_arm_act = self.act['left_arm_action'].cpu().numpy().squeeze(0)
+        right_arm_act = self.act['right_arm_action'].cpu().numpy().squeeze(0)
+        left_gripper_act = self.act['left_gripper_action'].cpu().numpy()[0].squeeze(0)
+        right_gripper_act = self.act['right_gripper_action'].cpu().numpy()[0].squeeze(0)
+        
+        # Check for NaN values - skip frame if any NaN found
+        has_nan = (np.isnan(left_arm_pos).any() or np.isnan(right_arm_pos).any() or 
+                   np.isnan(left_gripper_pos) or np.isnan(right_gripper_pos) or
+                   np.isnan(left_arm_act).any() or np.isnan(right_arm_act).any() or
+                   np.isnan(left_gripper_act) or np.isnan(right_gripper_act))
+        
+        if has_nan:
+            print(f"[WARN] Skipping frame with NaN values at time {self.rule_policy.count * self.sim.get_physics_dt():.3f}s")
+            return
+
         self.data_dict['/observations/head_rgb'].append(self.obs['head_rgb'].cpu().numpy().squeeze(0))
         self.data_dict['/observations/left_hand_rgb'].append(self.obs['left_hand_rgb'].cpu().numpy().squeeze(0))
         self.data_dict['/observations/right_hand_rgb'].append(self.obs['right_hand_rgb'].cpu().numpy().squeeze(0))
@@ -1107,20 +1128,20 @@ class GalaxeaLabExternalEnv(DirectRLEnv):
         self.data_dict['/observations/left_hand_depth'].append(self.obs['left_hand_depth'].cpu().numpy().squeeze(0).squeeze(-1))   
         self.data_dict['/observations/right_hand_depth'].append(self.obs['right_hand_depth'].cpu().numpy().squeeze(0).squeeze(-1))
         
-        self.data_dict['/observations/left_arm_joint_pos'].append(self.obs['left_arm_joint_pos'].cpu().numpy().squeeze(0))
-        self.data_dict['/observations/right_arm_joint_pos'].append(self.obs['right_arm_joint_pos'].cpu().numpy().squeeze(0))
-        self.data_dict['/observations/left_gripper_joint_pos'].append(self.obs['left_gripper_joint_pos'].cpu().numpy()[0].squeeze(0))
-        self.data_dict['/observations/right_gripper_joint_pos'].append(self.obs['right_gripper_joint_pos'].cpu().numpy()[0].squeeze(0))
+        self.data_dict['/observations/left_arm_joint_pos'].append(left_arm_pos)
+        self.data_dict['/observations/right_arm_joint_pos'].append(right_arm_pos)
+        self.data_dict['/observations/left_gripper_joint_pos'].append(left_gripper_pos)
+        self.data_dict['/observations/right_gripper_joint_pos'].append(right_gripper_pos)
         
         self.data_dict['/observations/left_arm_joint_vel'].append(self.obs['left_arm_joint_vel'].cpu().numpy().squeeze(0))
         self.data_dict['/observations/right_arm_joint_vel'].append(self.obs['right_arm_joint_vel'].cpu().numpy().squeeze(0))
         self.data_dict['/observations/left_gripper_joint_vel'].append(self.obs['left_gripper_joint_vel'].cpu().numpy()[0].squeeze(0))
         self.data_dict['/observations/right_gripper_joint_vel'].append(self.obs['right_gripper_joint_vel'].cpu().numpy()[0].squeeze(0))
         
-        self.data_dict['/actions/left_arm_action'].append(self.act['left_arm_action'].cpu().numpy().squeeze(0))
-        self.data_dict['/actions/right_arm_action'].append(self.act['right_arm_action'].cpu().numpy().squeeze(0))
-        self.data_dict['/actions/left_gripper_action'].append(self.act['left_gripper_action'].cpu().numpy()[0].squeeze(0))
-        self.data_dict['/actions/right_gripper_action'].append(self.act['right_gripper_action'].cpu().numpy()[0].squeeze(0))
+        self.data_dict['/actions/left_arm_action'].append(left_arm_act)
+        self.data_dict['/actions/right_arm_action'].append(right_arm_act)
+        self.data_dict['/actions/left_gripper_action'].append(left_gripper_act)
+        self.data_dict['/actions/right_gripper_action'].append(right_gripper_act)
 
         self.data_dict['/score'].append(self.score)
         self.data_dict['/current_time'].append(self.rule_policy.count * self.sim.get_physics_dt())
